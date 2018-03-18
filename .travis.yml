@@ -1,0 +1,12 @@
+language: d
+
+d:
+ - dmd
+ - ldc
+ 
+os:
+ - linux
+ - osx
+
+script:
+ - dub build --compiler=$DC

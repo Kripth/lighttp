@@ -1,0 +1,9 @@
+*.exe
+*.lib
+*.o
+*.a
+.dub
+*.userprefs
+*.selections.json
+*.lst
+*-test-library
