@@ -1,12 +1,14 @@
 language: d
 
 d:
- - dmd
- - ldc
+  - dmd
+  - ldc
  
 os:
- - linux
- - osx
+  - linux
 
 script:
- - dub build --compiler=$DC
+  - dub build --compiler=$DC
+  - cd examples
+  - dub build --single --compiler=$DC chat.d
+  - dub build --single --compiler=$DC static.d
