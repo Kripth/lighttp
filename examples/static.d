@@ -45,7 +45,7 @@ class StaticRouter : Router {
 		if(exists(file)) {
 			if(file.isFile) {
 				// browsers should be able to get the mime type from the content
-				res.body = cast(string)read(file);
+				res.body_ = read(file);
 			} else if(file.isDir) {
 				string[] dirs, files;
 				foreach(f ; dirEntries(file, SpanMode.shallow)) {
@@ -62,7 +62,7 @@ class StaticRouter : Router {
 				ret.put("</h1><hr>");
 				foreach(dir ; dirs) ret.put("<a href='" ~ _file ~ dir ~ "'>" ~ dir ~ "/</a><br>");
 				foreach(f ; files) ret.put("<a href='" ~ _file ~ f ~ "'>" ~ f ~ "</a><br>");
-				res.body = ret.data;
+				res.body_ = ret.data;
 				res.headers["Content-Type"] = "text/html";
 			}
 		} else {

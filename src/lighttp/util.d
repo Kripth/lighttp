@@ -2,6 +2,7 @@
 
 import std.array : Appender;
 import std.conv : to, ConvException;
+import std.random : uniform;
 import std.string : toUpper, toLower, split, join, strip, indexOf;
 import std.traits : EnumMembers;
 import std.zlib : HeaderFormat, Compress;
@@ -133,7 +134,15 @@ abstract class HTTP {
 	 */
 	string[string] headers;
 
-	string body_;
+	protected string _body;
+
+	@property string body_() pure nothrow @safe @nogc {
+		return _body;
+	}
+
+	@property string body_(in void[] data) pure nothrow @nogc {
+		return _body = cast(string)data;
+	}
 
 	static if(__VERSION__ >= 2078) alias body = body_;
 
@@ -224,7 +233,7 @@ class Request : HTTP {
 	 */
 	public bool parse(string data) {
 		string status;
-		if(decodeHTTP(data, status, this.headers, this.body_)) {
+		if(decodeHTTP(data, status, this.headers, this._body)) {
 			string[] spl = status.split(" ");
 			if(spl.length == 3) {
 				this.method = spl[0];
@@ -355,19 +364,18 @@ class Response : HTTP {
 	 * assert(response.content == "test");
 	 * ---
 	 */
-	public static Response parse(string str) {
-		Response response = new Response();
+	public bool parse(string str) {
 		string status;
-		if(decodeHTTP(str, status, response.headers, response.body_)) {
+		if(decodeHTTP(str, status, this.headers, this._body)) {
 			string[] head = status.split(" ");
 			if(head.length >= 3) {
 				try {
-					response.status = Status(to!uint(head[1]), join(head[2..$], " "));
-					response.valid = true;
+					this.status = Status(to!uint(head[1]), join(head[2..$], " "));
+					return true;
 				} catch(ConvException) {}
 			}
 		}
-		return response;
+		return false;
 	}
 	
 }
@@ -442,14 +450,43 @@ class Resource {
 		this.compressed = data;
 	}
 
-	public void apply(HTTP input, HTTP output) {
-		if(this.compressed !is null && input.headers.get("accept-encoding", "").indexOf("gzip") != -1) {
-			output.headers["Content-Encoding"] = "gzip";
-			output.body_ = cast(string)this.compressed;
+	public void apply(Request req, Response res) {
+		if(this.compressed !is null && req.headers.get("accept-encoding", "").indexOf("gzip") != -1) {
+			res.headers["Content-Encoding"] = "gzip";
+			res.body_ = cast(string)this.compressed;
 		} else {
-			output.body_ = cast(string)this.uncompressed;
+			res.body_ = cast(string)this.uncompressed;
 		}
-		output.headers["Content-Type"] = this.mime;
+		res.headers["Content-Type"] = this.mime;
 	}
 	
+}
+
+class CachedResource : Resource {
+
+	private string etag;
+
+	public this(string mime, size_t thresold=512) {
+		super(mime, thresold);
+	}
+	
+	public this(string mime, in void[] data) {
+		super(mime, data);
+	}
+
+	public override @property const(void)[] data(in void[] data) {
+		this.etag = to!string(uniform(ulong.min, ulong.max), 16);
+		return super.data(data);
+	}
+
+	public override void apply(Request req, Response res) {
+		if(req.headers.get("if-none-match", "") == this.etag) {
+			res.status = StatusCodes.notModified;
+		} else {
+			super.apply(req, res);
+			res.headers["Cache-Control"] = "public, max-age=31536000";
+			res.headers["ETag"] = this.etag;
+		}
+	}
+
 }
