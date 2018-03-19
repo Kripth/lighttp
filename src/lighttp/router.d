@@ -1,22 +1,41 @@
 ﻿module lighttp.router;
 
+import std.algorithm : max;
+import std.base64 : Base64;
 import std.conv : to;
-import std.regex : isRegexFor, matchAll;
+import std.digest.sha : sha1Of;
+import std.regex : Regex, isRegexFor, matchAll;
+import std.string : startsWith;
+import std.traits : Parameters;
 
+import libasync : NetworkAddress, AsyncTCPConnection;
+
+import lighttp.server : WebSocketClient;
 import lighttp.util;
+
+struct HandleResult {
+
+	bool success;
+	WebSocketClient webSocket = null;
+	void delegate() callOnConnect;
+
+}
+
+pragma(msg, HandleResult.sizeof);
 
 class Router {
 
 	private Route[][string] routes;
-	
-	void handle(Request req, Response res) {
-		if(req.path.length == 0 || "host" !in req.headers) {
+
+	void handle(ref HandleResult result, AsyncTCPConnection conn, Request req, Response res) {
+		if(!req.path.startsWith("/")) {
 			res.status = StatusCodes.badRequest;
 		} else {
 			auto routes = req.method in this.routes;
 			if(routes) {
 				foreach(route ; *routes) {
-					if(route.handle(req, res)) return;
+					route.handle(result, conn, req, res);
+					if(result.success) return;
 				}
 			}
 			res.status = StatusCodes.notFound;
@@ -24,70 +43,179 @@ class Router {
 	}
 	
 	void error(Request req, Response res) {
-		res.body_ = "<!DOCTYPE html><html><head><title>" ~ res.status.toString() ~ "</title><head><body><center><h1>" ~ res.status.toString() ~ "</h1></center><hr><center>" ~ res.headers.get("Server", "") ~ "</center></body></html>";
+		res.body_ = "<!DOCTYPE html><html><head><title>" ~ res.status.toString() ~ "</title></head><body><center><h1>" ~ res.status.toString() ~ "</h1></center><hr><center>" ~ res.headers.get("Server", "") ~ "</center></body></html>";
 	}
 	
-	void register(T, E...)(RouteInfo!T info, void delegate(Request, Response, E) del) {
+	void add(T, E...)(RouteInfo!T info, void delegate(E) del) {
 		this.routes[info.method] ~= new RouteOf!(T, E)(info.path, del);
 	}
 
-	void register(T)(RouteInfo!T info, Resource resource) {
-		this.register(info, (Request req, Response res){ resource.apply(req, res); });
+	void add(T)(RouteInfo!T info, Resource resource) {
+		this.add(info, (Request req, Response res){ resource.apply(req, res); });
+	}
+
+	void add(T, E...)(string method, T path, void delegate(E) del) {
+		this.add(RouteInfo!T(method, path), del);
+	}
+
+	void add(T)(string method, T path, Resource resource) {
+		this.add(RouteInfo!T(method, path), resource);
+	}
+
+	void addWebSocket(W:WebSocketClient, T)(RouteInfo!T info, W delegate() del) {
+		static if(__traits(hasMember, W, "onConnect")) this.routes[info.method] ~= new WebSocketRouteOf!(W, T, Parameters!(W.onConnect))(info.path, del);
+		else this.routes[info.method] ~= new WebSocketRouteOf!(W, T)(info.path, del);
+	}
+
+	void addWebSocket(W:WebSocketClient, T)(RouteInfo!T info) if(!__traits(isNested, W)) {
+		this.addWebSocket!(W, T)(info, { return new W(); });
+	}
+
+	void remove(T, E...)(RouteInfo!T info, void delegate(E) del) {
+		//TODO
 	}
 	
 }
 
 class Route {
 
-	abstract bool handle(Request req, Response res);
+	abstract void handle(ref HandleResult result, AsyncTCPConnection conn, Request req, Response res);
 
 }
 
-class RouteOf(T, E...) if(is(T == string) && E.length == 0 || isRegexFor!(T, string)) : Route {
+class RouteImpl(T, E...) if(is(T == string) || isRegexFor!(T, string)) : Route {
 
 	private T path;
-	private void delegate(Request, Response, E) del;
-
-	this(T path, void delegate(Request, Response, E) del) {
-		this.path = path;
-		this.del = del;
+	
+	static if(E.length) {
+		static if(is(E[0] == NetworkAddress)) {
+			enum __address = 0;
+			static if(E.length > 1) {
+				static if(is(E[1] == Request)) {
+					static if(E.length > 2 && is(E[2] == Response)) {
+						enum __response = 2;
+					}
+				} else static if(is(E[1] == Response)) {
+					enum __response = 1;
+				}
+			}
+		} else static if(is(E[0] == Request)) {
+			enum __request = 0;
+			static if(E.length > 1 && is(E[1] == Response)) enum __response = 1;
+		} else static if(is(E[0] == Response)) {
+			enum __response = 0;
+		}
 	}
-
-	override bool handle(Request req, Response res) {
+	
+	static if(!is(typeof(__address))) enum __address = -1;
+	static if(!is(typeof(__request))) enum __request = -1;
+	static if(!is(typeof(__response))) enum __response = -1;
+	
+	static if(__address == -1 && __request == -1 && __response == -1) {
+		alias Args = E[0..0];
+		alias Match = E[0..$];
+	} else {
+		enum _ = max(__address, __request, __response) + 1;
+		alias Args = E[0.._];
+		alias Match = E[_..$];
+	}
+	
+	static assert(Match.length == 0 || !is(T == string));
+	
+	this(T path) {
+		this.path = path;
+	}
+	
+	void callImpl(void delegate(E) del, AsyncTCPConnection conn, Request req, Response res, Match match) {
+		Args args;
+		static if(__address != -1) args[__address] = conn.local;
+		static if(__request != -1) args[__request] = req;
+		static if(__response != -1) args[__response] = res;
+		del(args, match);
+	}
+	
+	abstract void call(ref HandleResult result, AsyncTCPConnection conn, Request req, Response res, Match match);
+	
+	override void handle(ref HandleResult result, AsyncTCPConnection conn, Request req, Response res) {
 		static if(is(T == string)) {
 			if(req.path == this.path) {
-				this.del(req, res);
-				return true;
+				this.call(result, conn, req, res);
+				result.success = true;
 			}
 		} else {
 			auto match = req.path.matchAll(this.path);
-			if(match) {
+			if(match && match.post.length == 0) {
 				string[] matches;
 				foreach(m ; match.front) matches ~= m;
-				E args;
+				Match args;
 				static if(E.length == 1 && is(E[0] == string[])) {
 					args[0] = matches[1..$];
 				} else {
-					assert(matches.length > args.length); //TODO do this check at compile time
-					static foreach(i ; 0..E.length) {
-						args[i] = to!(E[i])(matches[i+1]);
+					if(matches.length != args.length + 1) throw new Exception("Arguments count mismatch"); //TODO do this check at compile time if possible
+					static foreach(i ; 0..Match.length) {
+						args[i] = to!(Match[i])(matches[i+1]);
 					}
 				}
-				this.del(req, res, args);
-				return true;
+				this.call(result, conn, req, res, args);
+				result.success = true;
 			}
 		}
-		return false;
+	}
+	
+}
+
+class RouteOf(T, E...) : RouteImpl!(T, E) {
+
+	private void delegate(E) del;
+	
+	this(T path, void delegate(E) del) {
+		super(path);
+		this.del = del;
+	}
+	
+	override void call(ref HandleResult result, AsyncTCPConnection conn, Request req, Response res, Match match) {
+		this.callImpl(this.del, conn, req, res, match);
+	}
+	
+}
+
+class WebSocketRouteOf(WebSocket, T, E...) : RouteImpl!(T, E) {
+
+	private WebSocket delegate() createWebSocket;
+
+	this(T path, WebSocket delegate() createWebSocket) {
+		super(path);
+		this.createWebSocket = createWebSocket;
+	}
+
+	override void call(ref HandleResult result, AsyncTCPConnection conn, Request req, Response res, Match match) {
+		auto key = "sec-websocket-key" in req.headers;
+		if(key) {
+			res.status = StatusCodes.switchingProtocols;
+			res.headers["Sec-WebSocket-Accept"] = Base64.encode(sha1Of(*key ~ "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")).idup;
+			res.headers["Connection"] = "upgrade";
+			res.headers["Upgrade"] = "websocket";
+			// create web socket and set callback for onConnect
+			WebSocket webSocket = this.createWebSocket();
+			webSocket.conn = conn;
+			result.webSocket = webSocket;
+			static if(__traits(hasMember, WebSocket, "onConnect")) result.callOnConnect = { this.callImpl(&webSocket.onConnect, conn, req, res, match); };
+			else result.callOnConnect = {};
+		} else {
+			res.status = StatusCodes.notFound;
+		}
 	}
 
 }
 
-struct RouteInfo(T) if(is(T == string) || isRegexFor!(T, string)) { 
+struct RouteInfo(T) if(is(T == string) || is(T == Regex!char) || isRegexFor!(T, string)) { 
 
 	string method;
 	T path;
 
 }
+
+private enum isRouteInfo(T) = is(T : RouteInfo!R, R);
 
 auto CustomMethod(R)(string method, R path){ return RouteInfo!R(method, path); }
 
@@ -101,10 +229,14 @@ void registerRoutes(R:Router)(R router) {
 		static if(__traits(getProtection, __traits(getMember, R, member)) == "public") {
 			foreach(uda ; __traits(getAttributes, __traits(getMember, R, member))) {
 				static if(isRouteInfo!(typeof(uda))) {
+					mixin("alias M = router." ~ member ~ ";");
 					static if(is(typeof(__traits(getMember, R, member)) == function)) {
-						router.register(uda, mixin("&router." ~ member));
+						router.add(uda, mixin("&router." ~ member));
+					} else static if(is(M == class)) {
+						static if(__traits(isNested, M)) router.addWebSocket!M(uda, { return router.new M(); });
+						else router.addWebSocket!M(uda);
 					} else {
-						router.register(uda, mixin("router." ~ member));
+						router.add(uda, mixin("router." ~ member));
 					}
 				}
 			}
@@ -112,5 +244,3 @@ void registerRoutes(R:Router)(R router) {
 	}
 	
 }
-
-enum isRouteInfo(T) = is(T : RouteInfo!R, R);

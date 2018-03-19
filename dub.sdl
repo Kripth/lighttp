@@ -1,5 +1,5 @@
 name "lighttp"
-description "Lightweight asynchronous HTTP server"
+description "Lightweight asynchronous HTTP/WS server"
 authors "Kripth"
 license "MIT"
 dependency "libasync" version="~>0.8.3"
