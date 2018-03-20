@@ -5,6 +5,7 @@ import std.conv : to, ConvException;
 import std.random : uniform;
 import std.string : toUpper, toLower, split, join, strip, indexOf;
 import std.traits : EnumMembers;
+import std.uri : encode, decode;
 import std.zlib : HeaderFormat, Compress;
 
 /**
@@ -214,7 +215,7 @@ class Request : HTTP {
 	 */
 	public override string toString() {
 		if(this.body_.length) this.headers["Content-Length"] = to!string(this.body_.length);
-		return encodeHTTP(this.method.toUpper() ~ " " ~ this.path ~ " HTTP/1.1", this.headers, this.body_);
+		return encodeHTTP(this.method.toUpper() ~ " " ~ encode(this.path) ~ " HTTP/1.1", this.headers, this.body_);
 	}
 	
 	/**
@@ -237,7 +238,7 @@ class Request : HTTP {
 			string[] spl = status.split(" ");
 			if(spl.length == 3) {
 				this.method = spl[0];
-				this.path = spl[1];
+				this.path = decode(spl[1]);
 				return true;
 			}
 		}
