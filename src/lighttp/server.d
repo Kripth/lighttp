@@ -1,10 +1,10 @@
 ﻿module lighttp.server;
 
-import std.bitmanip : nativeToBigEndian, bigEndianToNative;
-import std.conv : to;
+import std.system : Endian;
 
 import libasync;
-import memutils.all;
+
+import xbuffer;
 
 import lighttp.router;
 import lighttp.util;
@@ -61,18 +61,20 @@ class Server {
 
 		void handleHTTP(TCPEvent event) {
 			if(event == TCPEvent.READ) {
-				string req;
+				auto req = new Typed!(immutable char)(16);
 				static ubyte[] buffer = new ubyte[1024];
 				while(true) {
 					auto len = this.conn.recv(buffer);
-					if(len > 0) req ~= cast(string)buffer[0..len];
+					if(len > 0) req.write(buffer[0..len]);
 					if(len < buffer.length) break;
 				}
+				import std.stdio : writeln;
+				writeln(req.data);
 				Request request = new Request();
 				Response response = new Response();
 				response.headers["Server"] = name;
 				HandleResult result;
-				if(request.parse(req)) {
+				if(request.parse(req.data)) {
 					try router.handle(result, this.conn, request, response);
 					catch(Exception) response.status = StatusCodes.internalServerError;
 				} else {
@@ -80,8 +82,9 @@ class Server {
 				}
 				if(response.status.code >= 400) router.error(request, response);
 				this.conn.send(cast(ubyte[])response.toString());
-				if(result.webSocket is null) this.conn.kill();
-				else {
+				if(result.webSocket is null) {
+					this.conn.kill();
+				} else {
 					_handler = &result.webSocket.handle;
 					result.callOnConnect();
 				}
@@ -92,51 +95,49 @@ class Server {
 
 }
 
+/**
+ * Base class for web socket clients.
+ */
 class WebSocketClient {
 
 	AsyncTCPConnection conn; // set by the router
 
+	private Typed!ubyte buffer;
+
+	this() {
+		this.buffer = new Typed!ubyte(1024);
+	}
+
 	final void handle(TCPEvent event) {
 		switch(event) with(TCPEvent) {
 			case READ:
-				ubyte[] payload;
+				this.buffer.reset();
 				static ubyte[] buffer = new ubyte[1024];
 				while(true) {
 					auto len = this.conn.recv(buffer);
-					if(len > 0) payload ~= buffer[0..len];
+					if(len > 0) this.buffer.write(buffer[0..len]);
 					if(len < buffer.length) break;
 				}
-				if(payload.length > 2 && (payload[0] & 0b1111) == 1) {
-					bool masked = (payload[1] & 0b10000000) != 0;
-					size_t length = payload[1] & 0b01111111;
-					size_t index = 2;
+				try if((this.buffer.get() & 0b1111) == 1) {
+					immutable info = this.buffer.get();
+					immutable masked = (info & 0b10000000) != 0;
+					size_t length = info & 0b01111111;
 					if(length == 0b01111110) {
-						if(payload.length >= index + 2) {
-							ubyte[2] bytes = payload[index..index+2];
-							length = bigEndianToNative!ushort(bytes);
-							index += 2;
-						}
+						length = this.buffer.read!(Endian.bigEndian, ushort)();
 					} else if(length == 0b01111111) {
-						if(payload.length >= index + 8) {
-							ubyte[8] bytes = payload[index..index+8];
-							length = bigEndianToNative!ulong(bytes).to!size_t;
-							length += 8;
-						}
+						length = this.buffer.read!(Endian.bigEndian, ulong)() & size_t.max;
 					}
-					if(payload.length >= index + length) {
-						if(!masked) {
-							this.onReceive(payload[index..index+length]);
-						} else if(payload.length == index + length + 4) {
-							immutable index4 = index + 4;
-							ubyte[4] mask = payload[index..index4];
-							payload = payload[index4..index4+length];
-							foreach(i, ref ubyte p; payload) {
-								p ^= mask[i % 4];
-							}
-							this.onReceive(payload);
+					if(masked) {
+						ubyte[] mask = this.buffer.get(4);
+						ubyte[] data = this.buffer.get(length);
+						foreach(i, ref ubyte p; data) {
+							p ^= mask[i % 4];
 						}
+						this.onReceive(data);
+					} else {
+						this.onReceive(this.buffer.get(length));
 					}
-				}
+				} catch(BufferOverflowException) {}
 				break;
 			case CLOSE:
 				this.onClose();
@@ -150,17 +151,19 @@ class WebSocketClient {
 	 * Sends data to the connected web socket.
 	 */
 	void send(in void[] data) {
-		ubyte[] header = [0b10000001];
+		this.buffer.reset();
+		this.buffer.put(0b10000001);
 		if(data.length < 0b01111110) {
-			header ~= data.length & 255;
+			this.buffer.put(data.length & ubyte.max);
 		} else if(data.length < ushort.max) {
-			header ~= 0b01111110;
-			header ~= nativeToBigEndian(cast(ushort)data.length);
+			this.buffer.put(0b01111110);
+			this.buffer.write!(Endian.bigEndian, ushort)(data.length & ushort.max);
 		} else {
-			header ~= 0b01111111;
-			header ~= nativeToBigEndian(cast(ulong)data.length);
+			this.buffer.put(0b01111111);
+			this.buffer.write!(Endian.bigEndian, ulong)(data.length);
 		}
-		this.conn.send(header ~ cast(ubyte[])data);
+		this.buffer.write(data);
+		this.conn.send(this.buffer.data);
 	}
 
 	/**
