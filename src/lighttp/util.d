@@ -2,7 +2,8 @@
 
 import std.array : Appender;
 import std.conv : to, ConvException;
-import std.random : uniform;
+import std.base64 : Base64URLNoPadding;
+import std.digest.crc : crc32Of;
 import std.string : toUpper, toLower, split, join, strip, indexOf;
 import std.traits : EnumMembers;
 import std.uri : encode, decode;
@@ -476,7 +477,7 @@ class CachedResource : Resource {
 	}
 
 	public override @property const(void)[] data(in void[] data) {
-		this.etag = to!string(uniform(ulong.min, ulong.max), 16);
+		this.etag = Base64URLNoPadding.encode(crc32Of(data));
 		return super.data(data);
 	}
 
