@@ -5,10 +5,10 @@ dependency "lighttp" path=".."
 +/
 module app;
 
+import std.file : read;
 import std.json : JSONValue;
 import std.regex : ctRegex;
 
-import libasync;
 import lighttp;
 
 void main(string[] args) {
@@ -22,12 +22,12 @@ void main(string[] args) {
 
 class Chat : Router {
 
-	@Get("/chat") Resource index;
+	@Get("/") Resource index;
 	
 	private Room[string] rooms;
 	
 	this() {
-		this.index = new CachedResource("text/html", INDEX);
+		this.index = new CachedResource("text/html", read("res/chat.html"));
 	}
 	
 	@Get(ctRegex!`\/room\/([a-z0-9]{2,16})@([a-zA-Z0-9]{3,16})`) class Client : WebSocketClient {
@@ -79,49 +79,3 @@ class Room {
 	}
 
 }
-
-enum string INDEX = q{
-<html>
-	<head>
-		<script>
-			function join(room, username) {
-				var ws = new WebSocket("ws://" + location.host + "/room/" + room + "@" + username);
-				ws.onopen = function(){
-					document.body.innerHTML = "<div id='messages'></div><input id='message' /><button id='send'>Send</button>";
-					var send = function(){
-						var message = document.getElementById("message");
-						if(message.value.length > 0) {
-							ws.send(message.value);
-							message.value = "";
-						}
-					};
-					document.getElementById("send").onclick = send;
-					document.getElementById("message").onkeydown = function(event){
-						if(event.keyCode == 13) send();
-					}
-				}
-				ws.onmessage = function(message){
-					var json = JSON.parse(message.data);
-					var mx = (function(){
-						switch(json.type) {
-							case "join":
-								return json.user.name + " joined";
-							case "leave":
-								return json.user.name + " left";
-							case "message":
-								return json.user.name + ": " + json.message;
-						}
-					})();
-					console.log(mx);
-					document.getElementById("messages").innerHTML += "<p>" + mx + "</p>";
-				}
-			}
-		</script>
-	</head>
-	<body>
-		<input placeholder="room" />
-		<input placeholder="name" />
-		<button onclick="join(document.getElementsByTagName('input')[0].value, document.getElementsByTagName('input')[1].value)">Connect</button>
-	</body>
-</html>
-};
