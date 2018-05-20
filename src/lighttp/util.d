@@ -4,6 +4,7 @@ import std.array : Appender;
 import std.conv : to, ConvException;
 import std.base64 : Base64URLNoPadding;
 import std.digest.crc : crc32Of;
+import std.json : JSONValue;
 import std.string : toUpper, toLower, split, join, strip, indexOf;
 import std.traits : EnumMembers;
 import std.uri : encode, decode;
@@ -142,8 +143,21 @@ abstract class HTTP {
 		return _body;
 	}
 
-	@property string body_(in void[] data) pure nothrow @nogc {
+	/*@property string body_(in void[] data) pure nothrow @nogc {
 		return _body = cast(string)data;
+	}*/
+
+	@property string body_(T)(T data) {
+		static if(is(T : string)) {
+			return _body = cast(string)data;
+		} else static if(is(T == JSONValue)) {
+			this.headers["Content-Type"] = "application/json; charset=utf-8";
+			return _body = data.toString();
+		} else static if(is(T == JSONValue[string]) || is(T == JSONValue[])) {
+			return body_ = JSONValue(data);
+		} else {
+			return _body = data.to!string;
+		}
 	}
 
 	static if(__VERSION__ >= 2078) alias body = body_;
@@ -358,8 +372,8 @@ class Response : HTTP {
 	 * an easier search in the associative array.
 	 * Example:
 	 * ---
-	 * auto response = Response.parse("HTTP/1.1 200 OK\r\nContent-Type: plain/text\r\nContent-Length: 4\r\n\r\ntest");
-	 * assert(response.valid);
+	 * auto response = new Response()
+	 * assert(response.parse("HTTP/1.1 200 OK\r\nContent-Type: plain/text\r\nContent-Length: 4\r\n\r\ntest"));
 	 * assert(response.status == 200);
 	 * assert(response.headers["content-type"] == "text/plain");
 	 * assert(response.headers["content-length"] == "4");

@@ -21,8 +21,6 @@ struct HandleResult {
 
 }
 
-pragma(msg, HandleResult.sizeof);
-
 class Router {
 
 	private Route[][string] routes;
@@ -43,7 +41,8 @@ class Router {
 	}
 	
 	void error(Request req, Response res) {
-		res.body_ = "<!DOCTYPE html><html><head><title>" ~ res.status.toString() ~ "</title></head><body><center><h1>" ~ res.status.toString() ~ "</h1></center><hr><center>" ~ res.headers.get("Server", "") ~ "</center></body></html>";
+		res.headers["Content-Type"] = "text/html";
+		res.body_ = "<!DOCTYPE html><html><head><title>" ~ res.status.message ~ "</title></head><body><center><h1>" ~ res.status.toString() ~ "</h1></center><hr><center>lighttp/0.1</center></body></html>";
 	}
 	
 	void add(T, E...)(RouteInfo!T info, void delegate(E) del) {

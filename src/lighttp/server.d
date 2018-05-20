@@ -9,23 +9,21 @@ import xbuffer;
 import lighttp.router;
 import lighttp.util;
 
-private enum __lighttp = "lighttp/0.1.0";
-
 class Server {
 
 	private EventLoop evl;
 	private Router router;
 
-	private immutable string name;
+	public immutable string name;
 
-	this(R:Router)(EventLoop evl, R router, string name=__lighttp) {
+	this(R:Router)(EventLoop evl, R router, string name="lighttp") {
 		this.evl = evl;
 		registerRoutes(router);
 		this.router = router;
 		this.name = name;
 	}
 
-	this(R:Router)(R router, string name=__lighttp) {
+	this(R:Router)(R router, string name="lighttp") {
 		this(getThreadEventLoop(), router, name);
 	}
 
@@ -37,6 +35,14 @@ class Server {
 		auto listener = new AsyncTCPListener(this.evl);
 		listener.host(ip, port);
 		listener.run(&this.handler);
+	}
+
+	void host(string ip) {
+		return this.host(ip, this.defaultPort);
+	}
+
+	@property ushort defaultPort() pure nothrow @safe @nogc {
+		return 80;
 	}
 
 	void delegate(TCPEvent) handler(AsyncTCPConnection conn) {
@@ -68,8 +74,6 @@ class Server {
 					if(len > 0) req.write(buffer[0..len]);
 					if(len < buffer.length) break;
 				}
-				import std.stdio : writeln;
-				writeln(req.data);
 				Request request = new Request();
 				Response response = new Response();
 				response.headers["Server"] = name;
@@ -80,7 +84,7 @@ class Server {
 				} else {
 					response.status = StatusCodes.badRequest;
 				}
-				if(response.status.code >= 400) router.error(request, response);
+				if(response.status.code >= 400 && response.body_.length == 0) router.error(request, response);
 				this.conn.send(cast(ubyte[])response.toString());
 				if(result.webSocket is null) {
 					this.conn.kill();
