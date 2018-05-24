@@ -106,7 +106,7 @@ enum StatusCodes : Status {
 	preconditionFailed = Status(412, "Precondition Failed"),
 	payloadTooLarge = Status(413, "Payload Too Large"),
 	uriTooLong = Status(414, "URI Too Long"),
-	unsupportedMediaType = Status(415, "UnsupportedMediaType"),
+	unsupportedMediaType = Status(415, "Unsupported Media Type"),
 	rangeNotSatisfiable = Status(416, "Range Not Satisfiable"),
 	expectationFailed = Status(417, "Expectation Failed"),
 	

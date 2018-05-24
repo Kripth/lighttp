@@ -5,19 +5,18 @@ import std.base64 : Base64;
 import std.conv : to;
 import std.digest.sha : sha1Of;
 import std.regex : Regex, isRegexFor, matchAll;
-import std.string : startsWith;
-import std.traits : Parameters;
+import std.string : startsWith, indexOf, split, strip;
+import std.traits : Parameters, hasUDA;
 
 import libasync : NetworkAddress, AsyncTCPConnection;
 
-import lighttp.server : WebSocketClient;
+import lighttp.server : Connection, MultipartConnection, WebSocketClient;
 import lighttp.util;
 
 struct HandleResult {
 
 	bool success;
-	WebSocketClient webSocket = null;
-	void delegate() callOnConnect;
+	Connection connection = null;
 
 }
 
@@ -59,6 +58,10 @@ class Router {
 
 	void add(T)(string method, T path, Resource resource) {
 		this.add(RouteInfo!T(method, path), resource);
+	}
+	
+	void addMultipart(T, E...)(RouteInfo!T info, void delegate(E) del) {
+		this.routes[info.method] ~= new MultipartRouteOf!(T, E)(info.path, del);
 	}
 
 	void addWebSocket(W:WebSocketClient, T)(RouteInfo!T info, W delegate() del) {
@@ -178,6 +181,32 @@ class RouteOf(T, E...) : RouteImpl!(T, E) {
 	
 }
 
+class MultipartRouteOf(T, E...) : RouteOf!(T, E) {
+
+	this(T path, void delegate(E) del) {
+		super(path, del);
+	}
+
+	override void call(ref HandleResult result, AsyncTCPConnection conn, Request req, Response res, Match match) {
+		auto lstr = "content-length" in req.headers;
+		if(lstr) {
+			try {
+				size_t length = to!size_t(*lstr);
+				if(req.body_.length >= length) {
+					return super.call(result, conn, req, res, match);
+				} else {
+					// wait for full data
+					result.connection = new MultipartConnection(conn, length, req, { super.call(result, conn, req, res, match); });
+					return;
+				}
+			} catch(ConvException) {}
+		}
+		result.success = false;
+		res.status = StatusCodes.badRequest;
+	}
+
+}
+
 class WebSocketRouteOf(WebSocket, T, E...) : RouteImpl!(T, E) {
 
 	private WebSocket delegate() createWebSocket;
@@ -197,9 +226,8 @@ class WebSocketRouteOf(WebSocket, T, E...) : RouteImpl!(T, E) {
 			// create web socket and set callback for onConnect
 			WebSocket webSocket = this.createWebSocket();
 			webSocket.conn = conn;
-			result.webSocket = webSocket;
-			static if(__traits(hasMember, WebSocket, "onConnect")) result.callOnConnect = { this.callImpl(&webSocket.onConnect, conn, req, res, match); };
-			else result.callOnConnect = {};
+			result.connection = webSocket;
+			static if(__traits(hasMember, WebSocket, "onConnect")) webSocket.onStartImpl = { this.callImpl(&webSocket.onConnect, conn, req, res, match); };
 		} else {
 			res.status = StatusCodes.notFound;
 		}
@@ -220,21 +248,27 @@ auto CustomMethod(R)(string method, R path){ return RouteInfo!R(method, path); }
 
 auto Get(R)(R path){ return RouteInfo!R("GET", path); }
 
-auto Post(R)(R path){ return RouteInfo!R("POST", path); }
+auto Post(R)(R path, in char[] accept="*/*", size_t max=size_t.max){ return RouteInfo!R("POST", path); }
+
+enum Multipart;
 
 void registerRoutes(R:Router)(R router) {
 
 	foreach(member ; __traits(allMembers, R)) {
 		static if(__traits(getProtection, __traits(getMember, R, member)) == "public") {
 			foreach(uda ; __traits(getAttributes, __traits(getMember, R, member))) {
-				static if(isRouteInfo!(typeof(uda))) {
+				static if(is(typeof(uda)) && isRouteInfo!(typeof(uda))) {
 					mixin("alias M = router." ~ member ~ ";");
 					static if(is(typeof(__traits(getMember, R, member)) == function)) {
-						router.add(uda, mixin("&router." ~ member));
+						// function
+						static if(hasUDA!(__traits(getMember, R, member), Multipart)) router.addMultipart(uda, mixin("&router." ~ member));
+						else router.add(uda, mixin("&router." ~ member));
 					} else static if(is(M == class)) {
+						// websocket
 						static if(__traits(isNested, M)) router.addWebSocket!M(uda, { return router.new M(); });
 						else router.addWebSocket!M(uda);
 					} else {
+						// member
 						router.add(uda, mixin("router." ~ member));
 					}
 				}
