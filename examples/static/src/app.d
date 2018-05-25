@@ -1,8 +1,3 @@
-/+ dub.sdl:
-name "static"
-description "Serves all files in the given directory"
-dependency "lighttp" path=".."
-+/
 module app;
 
 import std.algorithm : sort;

@@ -1,0 +1,3 @@
+name "static"
+description "Serves all files in the given directory"
+dependency "lighttp" path="../.."

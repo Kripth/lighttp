@@ -5,12 +5,12 @@ import std.base64 : Base64;
 import std.conv : to;
 import std.digest.sha : sha1Of;
 import std.regex : Regex, isRegexFor, matchAll;
-import std.string : startsWith, indexOf, split, strip;
+import std.string : startsWith;
 import std.traits : Parameters, hasUDA;
 
 import libasync : NetworkAddress, AsyncTCPConnection;
 
-import lighttp.server : Connection, MultipartConnection, WebSocketClient;
+import lighttp.server : Connection, MultipartConnection, WebSocketConnection;
 import lighttp.util;
 
 struct HandleResult {
@@ -64,12 +64,12 @@ class Router {
 		this.routes[info.method] ~= new MultipartRouteOf!(T, E)(info.path, del);
 	}
 
-	void addWebSocket(W:WebSocketClient, T)(RouteInfo!T info, W delegate() del) {
+	void addWebSocket(W:WebSocketConnection, T)(RouteInfo!T info, W delegate() del) {
 		static if(__traits(hasMember, W, "onConnect")) this.routes[info.method] ~= new WebSocketRouteOf!(W, T, Parameters!(W.onConnect))(info.path, del);
 		else this.routes[info.method] ~= new WebSocketRouteOf!(W, T)(info.path, del);
 	}
 
-	void addWebSocket(W:WebSocketClient, T)(RouteInfo!T info) if(!__traits(isNested, W)) {
+	void addWebSocket(W:WebSocketConnection, T)(RouteInfo!T info) if(!__traits(isNested, W)) {
 		this.addWebSocket!(W, T)(info, { return new W(); });
 	}
 

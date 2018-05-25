@@ -1,8 +1,3 @@
-/+ dub.sdl:
-name "chat"
-description "Simple chatroom using websockets"
-dependency "lighttp" path=".."
-+/
 module app;
 
 import std.file : read;
@@ -30,7 +25,7 @@ class Chat : Router {
 		this.index = new CachedResource("text/html", read("res/chat.html"));
 	}
 	
-	@Get(ctRegex!`\/room\/([a-z0-9]{2,16})@([a-zA-Z0-9]{3,16})`) class Client : WebSocketClient {
+	@Get(ctRegex!`\/room\/([a-z0-9]{2,16})@([a-zA-Z0-9]{3,16})`) class Client : WebSocket {
 	
 		private static uint _id = 0;
 	

@@ -120,7 +120,7 @@ class Connection {
 		switch(event) with(TCPEvent) {
 			case READ:
 				this.buffer.reset();
-				static ubyte[] buffer = new ubyte[1024];
+				static ubyte[] buffer = new ubyte[4096];
 				while(true) {
 					auto len = this.conn.recv(buffer);
 					if(len > 0) this.buffer.write(buffer[0..len]);
@@ -171,7 +171,7 @@ class MultipartConnection : Connection {
 /**
  * Base class for web socket clients.
  */
-class WebSocketClient : Connection {
+class WebSocketConnection : Connection {
 
 	void delegate() onStartImpl;
 
