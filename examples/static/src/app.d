@@ -34,7 +34,7 @@ class StaticRouter : Router {
 		this.path = path;
 	}
 
-	@Get(ctRegex!`\/(.*)`) get(Request req, Response res, string _file) {
+	@Get(`(.*)`) get(Request req, Response res, string _file) {
 		//TODO remove ../ for security reason
 		immutable file = buildNormalizedPath(this.path, _file);
 		if(exists(file)) {

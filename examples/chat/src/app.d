@@ -17,7 +17,7 @@ void main(string[] args) {
 
 class Chat : Router {
 
-	@Get("/") Resource index;
+	@Get("") Resource index;
 	
 	private Room[string] rooms;
 	
@@ -25,7 +25,7 @@ class Chat : Router {
 		this.index = new CachedResource("text/html", read("res/chat.html"));
 	}
 	
-	@Get(ctRegex!`\/room\/([a-z0-9]{2,16})@([a-zA-Z0-9]{3,16})`) class Client : WebSocket {
+	@Get(`room`, `([a-z0-9]{2,16})@([a-zA-Z0-9]{3,16})`) class Client : WebSocket {
 	
 		private static uint _id = 0;
 	

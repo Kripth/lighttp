@@ -5,6 +5,7 @@ import std.conv : to, ConvException;
 import std.base64 : Base64URLNoPadding;
 import std.digest.crc : crc32Of;
 import std.json : JSONValue;
+import std.regex : ctRegex;
 import std.string : toUpper, toLower, split, join, strip, indexOf;
 import std.traits : EnumMembers;
 import std.uri : encode, decode;
@@ -505,4 +506,16 @@ class CachedResource : Resource {
 		}
 	}
 
+}
+
+auto path(paths...)() {
+	static if(paths.length == 1 && is(typeof(paths[0]) == string[])) {
+		return ctRegex!(paths[0].join(`\/`));
+	} else {
+		static if(is(typeof(paths[0]) == string[])) {
+			return path!(paths[0] ~ paths[1], paths[2..$]);
+		} else {
+			return path!([paths[0]], paths[1..$]);
+		}
+	}
 }

@@ -4,8 +4,8 @@ import std.algorithm : max;
 import std.base64 : Base64;
 import std.conv : to;
 import std.digest.sha : sha1Of;
-import std.regex : Regex, isRegexFor, matchAll;
-import std.string : startsWith;
+import std.regex : Regex, isRegexFor, regex, matchAll;
+import std.string : startsWith, join;
 import std.traits : Parameters, hasUDA;
 
 import libasync : NetworkAddress, AsyncTCPConnection;
@@ -121,8 +121,8 @@ class RouteImpl(T, E...) if(is(T == string) || isRegexFor!(T, string)) : Route {
 		alias Args = E[0.._];
 		alias Match = E[_..$];
 	}
-	
-	static assert(Match.length == 0 || !is(T == string));
+
+	static assert(Match.length == 0 || !is(T : string));
 	
 	this(T path) {
 		this.path = path;
@@ -140,12 +140,12 @@ class RouteImpl(T, E...) if(is(T == string) || isRegexFor!(T, string)) : Route {
 	
 	override void handle(ref HandleResult result, AsyncTCPConnection conn, Request req, Response res) {
 		static if(is(T == string)) {
-			if(req.path == this.path) {
+			if(req.path[1..$] == this.path) {
 				this.call(result, conn, req, res);
 				result.success = true;
 			}
 		} else {
-			auto match = req.path.matchAll(this.path);
+			auto match = req.path[1..$].matchAll(this.path);
 			if(match && match.post.length == 0) {
 				string[] matches;
 				foreach(m ; match.front) matches ~= m;
@@ -235,10 +235,23 @@ class WebSocketRouteOf(WebSocket, T, E...) : RouteImpl!(T, E) {
 
 }
 
-struct RouteInfo(T) if(is(T == string) || is(T == Regex!char) || isRegexFor!(T, string)) { 
-
+struct RouteInfo(T) if(is(T : string) || is(T == Regex!char) || isRegexFor!(T, string)) {
+	
 	string method;
 	T path;
+
+}
+
+template routeInfo(E...) {
+
+	static if(E.length <= 1) alias routeInfo = RouteInfo!E;
+	else {
+		RouteInfo!(Regex!char) routeInfo(string method, E path) {
+			string[] p;
+			foreach(pp ; path) p ~= pp;
+			return RouteInfo!(Regex!char)(method, regex(p.join(`\/`)));
+		}
+	}
 
 }
 
@@ -246,9 +259,9 @@ private enum isRouteInfo(T) = is(T : RouteInfo!R, R);
 
 auto CustomMethod(R)(string method, R path){ return RouteInfo!R(method, path); }
 
-auto Get(R)(R path){ return RouteInfo!R("GET", path); }
+auto Get(R...)(R path){ return routeInfo!R("GET", path); }
 
-auto Post(R)(R path, in char[] accept="*/*", size_t max=size_t.max){ return RouteInfo!R("POST", path); }
+auto Post(R...)(R path){ return routeInfo!R("POST", path); }
 
 enum Multipart;
 
