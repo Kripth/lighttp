@@ -9,6 +9,7 @@ os:
 
 script:
   - dub build --compiler=$DC
-  - cd examples
-  - dub build --single --compiler=$DC chat.d
-  - dub build --single --compiler=$DC static.d
+  - cd examples/chat
+  - dub build --compiler=$DC
+  - cd ../static
+  - dub build --compiler=$DC

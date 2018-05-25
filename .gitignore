@@ -7,3 +7,4 @@
 *.selections.json
 *.lst
 *-test-library
+src/app.d
