@@ -94,6 +94,7 @@ class RouteImpl(T, E...) if(is(T == string) || isRegexFor!(T, string)) : Route {
 			enum __address = 0;
 			static if(E.length > 1) {
 				static if(is(E[1] == Request)) {
+					enum __request = 1;
 					static if(E.length > 2 && is(E[2] == Response)) {
 						enum __response = 2;
 					}
