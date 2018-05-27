@@ -242,17 +242,17 @@ struct RouteInfo(T) if(is(T : string) || is(T == Regex!char) || isRegexFor!(T, s
 
 }
 
-template routeInfo(E...) {
-
-	static if(E.length <= 1) alias routeInfo = RouteInfo!E;
-	else {
-		RouteInfo!(Regex!char) routeInfo(string method, E path) {
-			string[] p;
-			foreach(pp ; path) p ~= pp;
-			return RouteInfo!(Regex!char)(method, regex(p.join(`\/`)));
-		}
+auto routeInfo(E...)(string method, E path) {
+	static if(E.length == 0) {
+		return routeInfo(method, "");
+	} else static if(E.length == 1) {
+		static if(isRegexFor!(E[0], string)) return RouteInfo!E(method, path);
+		else return RouteInfo!(Regex!char)(method, regex(path));
+	} else {
+		string[] p;
+		foreach(pp ; path) p ~= pp;
+		return RouteInfo!(Regex!char)(method, regex(p.join(`\/`)));
 	}
-
 }
 
 private enum isRouteInfo(T) = is(T : RouteInfo!R, R);
