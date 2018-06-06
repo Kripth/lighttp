@@ -1,0 +1,79 @@
+platform:
+  - x86
+  - x64
+
+configuration:
+  - debug
+  - release
+
+environment:
+  matrix:
+    - DC: dmd
+    - DC: ldc
+
+skip_tags: false
+
+install:
+  - ps: function SetUpDCompiler
+        {
+            if($env:platform -eq "x86"){
+              $env:DConf = "m32";
+              $env:lower_platform = "x86";
+            }
+            elseif($env:platform -eq "x64"){
+              $env:DConf = "m64";
+              $env:lower_platform = "x64";
+            }
+            if($env:DC -eq "dmd"){
+              appveyor DownloadFile "http://downloads.dlang.org/releases/LATEST";
+              $version = (Get-Content -Path LATEST).toString();
+              appveyor DownloadFile "http://downloads.dlang.org/releases/2.x/$($version)/dmd.$($version).windows.7z" -FileName "c:\dmd.7z";
+              echo "finished.";
+              pushd c:\\;
+              7z x dmd.7z > $null;
+              popd;
+            }
+            elseif($env:DC -eq "ldc"){
+              appveyor DownloadFile "https://raw.githubusercontent.com/ldc-developers/ldc-developers.github.io/master/LATEST";
+              $version = (Get-Content -Path LATEST).toString();
+              appveyor DownloadFile "https://github.com/ldc-developers/ldc/releases/download/v$($version)/ldc2-$($version)-windows-$($env:lower_platform).7z" -FileName "c:\ldc.7z";
+              echo "finished.";
+              pushd c:\\;
+              7z x ldc.7z > $null;
+              mv ldc2-$($version)-windows-$($env:lower_platform) ldc2;
+              popd;
+            }
+        }
+  - ps: SetUpDCompiler
+  - appveyor DownloadFile "http://code.dlang.org/files/dub-1.3.0-windows-x86.zip" -FileName dub.zip
+  - 7z x dub.zip -odub > nul
+  - set PATH=%CD%;%CD%\%binpath%;%CD%\dub;%PATH%
+  - dub --version
+
+before_build:
+  - ps: if($env:platform -eq "x86"){
+            $env:compilersetupargs = "x86";
+            if($env:DC -eq "dmd"){
+              $env:Darch = "x86_mscoff";
+            }
+            elseif($env:DC -eq "ldc") {
+              $env:Darch = "x86";
+            }
+            $env:Darch = "x86";
+          }
+        elseif($env:platform -eq "x64"){
+            $env:compilersetupargs = "amd64";
+            $env:Darch = "x86_64";
+        }
+  - ps : if($env:DC -eq "dmd"){
+           $env:PATH += ";C:\dmd2\windows\bin;";
+         }
+         elseif($env:DC -eq "ldc"){
+           $env:PATH += ";C:\ldc2\bin";
+           $env:DC = "ldc2";
+         }
+  - ps: $env:compilersetup = "C:\Program Files (x86)\Microsoft Visual Studio 14.0\VC\vcvarsall";
+  - '"%compilersetup%" %compilersetupargs%'
+
+build_script:
+  - dub build --compiler=%DC% --arch=%Darch%
