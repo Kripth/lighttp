@@ -1,4 +1,4 @@
-lighttp
+![](https://i.imgur.com/w1Hv7KZ.png) lighttp
 =======
 
 [![DUB Package](https://img.shields.io/dub/v/lighttp.svg)](https://code.dlang.org/packages/lighttp)
