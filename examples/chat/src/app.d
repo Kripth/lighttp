@@ -10,6 +10,7 @@ void main(string[] args) {
 
 	auto server = new Server(new Chat());
 	server.host("0.0.0.0", 80);
+	server.host("::", 80);
 	
 	while(true) server.eventLoop.loop();
 
@@ -25,16 +26,18 @@ class Chat : Router {
 		this.index = new CachedResource("text/html", read("res/chat.html"));
 	}
 	
-	@Get(`room`, `([a-z0-9]{2,16})@([a-zA-Z0-9]{3,16})`) class Client : WebSocket {
+	@Get(`room`, `([a-z0-9]{1,16})@([a-zA-Z0-9_]{1,32})`) class Client : WebSocket {
 	
 		private static uint _id = 0;
 	
 		public uint id;
+		public string ip;
 		public string name;
 		private Room* room;
 		
 		void onConnect(NetworkAddress address, string room, string name) {
 			this.id = _id++;
+			this.ip = address.toAddressString();
 			this.name = name;
 			if(room !in rooms) rooms[room] = new Room();
 			this.room = room in rooms;
@@ -46,7 +49,7 @@ class Chat : Router {
 		}
 		
 		override void onReceive(ubyte[] data) {
-			this.room.broadcast(this, JSONValue(["type": "message", "message": cast(string)data]));
+			this.room.broadcast(JSONValue(["type": JSONValue("message"), "sender": JSONValue(this.id), "message": JSONValue(cast(string)data)]));
 		}
 	
 	}
@@ -58,17 +61,26 @@ class Room {
 	Chat.Client[uint] clients;
 	
 	void add(Chat.Client client) {
+		// send current clients to the new client
+		if(this.clients.length) {
+			JSONValue[] clients;
+			foreach(c ; this.clients) {
+				clients ~= JSONValue(["id": JSONValue(c.id), "ip": JSONValue(c.ip), "name": JSONValue(c.name)]);
+			}
+			client.send(JSONValue(["type": JSONValue("list"), "list": JSONValue(clients)]).toString());
+		}
+		// add to list and send new client to other clients
 		this.clients[client.id] = client;
-		this.broadcast(client, JSONValue(["type": "join"]));
+		this.broadcast(JSONValue(["type": JSONValue("add"), "id": JSONValue(client.id), "ip": JSONValue(client.ip), "name": JSONValue(client.name)]));
 	}
 	
 	void remove(Chat.Client client) {
+		// remove client and broadcast message
 		this.clients.remove(client.id);
-		this.broadcast(client, JSONValue(["type": "leave"]));
+		this.broadcast(JSONValue(["type": JSONValue("remove"), "id": JSONValue(client.id)]));
 	}
 	
-	void broadcast(Chat.Client client, JSONValue json) {
-		json["user"] = ["id": JSONValue(client.id), "name": JSONValue(client.name)];
+	void broadcast(JSONValue json) {
 		string message = json.toString();
 		foreach(client ; this.clients) client.send(message);
 	}

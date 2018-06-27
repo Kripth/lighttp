@@ -3,10 +3,13 @@
 	<head>
 		<title>Chatroom using lighttp's websockets</title>
 		<script>
+			var clients = {};
 			function join(room, username) {
+				//var clients = {};
 				var ws = new WebSocket("ws://" + location.host + "/room/" + room + "@" + username);
 				ws.onopen = function(){
-					document.body.innerHTML = "<div id='messages'></div><input id='message' /><button id='send'>Send</button>";
+					document.getElementById("login").style.display = "none";
+					document.getElementById("chat").style.display = "block	";
 					var send = function(){
 						var message = document.getElementById("message");
 						if(message.value.length > 0) {
@@ -21,24 +24,99 @@
 				}
 				ws.onmessage = function(message){
 					var json = JSON.parse(message.data);
-					var mx = (function(){
-						switch(json.type) {
-							case "join":
-								return json.user.name + " joined";
-							case "leave":
-								return json.user.name + " left";
-							case "message":
-								return json.user.name + ": " + json.message;
-						}
-					})();
-					document.getElementById("messages").innerHTML += "<p>" + mx + "</p>";
+					console.log(json);
+					switch(json.type) {
+						case "list":
+							for(var i in json.list) {
+								clients[json.list[i].id] = {"name": json.list[i].name, "ip": json.list[i].ip};
+							}
+							updateClients();
+							break;
+						case "add":
+							clients[json.id] = {"name": json.name, "ip": json.ip};
+							updateClients();
+							break;
+						case "remove":
+							clients.remove(json.id);
+							updateClients();
+							break;
+						case "message":
+							var sender = clients[json.sender];
+							document.getElementById("messages").innerHTML += "<p><strong>" + sender.name + "</strong>: " + json.message + "</p>";
+							break;
+					}
+				}
+				function updateClients() {
+					var html;
+					for(var i in clients) {
+						html += "<p>" + clients[i].name + "</p>";
+					}
+					document.getElementById("clients").innerHTML = html;
 				}
 			}
 		</script>
+		<style>
+			body {
+				font-family: arial;
+			}
+			#login {
+				position: absolute;
+				top: 50%;
+				left: 50%;
+				transform: translateX(-50%) translateY(-50%);
+			}
+			input, button {
+				margin: 4px;
+				block: 1px solid silver;
+			}
+			input {
+				display: block;
+				padding: 4px;
+			}
+			button {
+				float: right;
+				padding: 2px;
+			}
+			#chat {
+				display: none;
+				width: 100%;
+			}
+			#message {
+				width: 100%;
+			}
+			p {
+				padding: 0px 16px;
+			}
+			#clients {
+				border: 1px solid silver;
+				margin: 4px;
+				padding: 4px;
+			}
+		</style>
 	</head>
 	<body>
-		<input placeholder="room" />
-		<input placeholder="name" />
-		<button onclick="join(document.getElementsByTagName('input')[0].value, document.getElementsByTagName('input')[1].value)">Connect</button>
+		<div id="login">
+			<input placeholder="room" />
+			<input placeholder="name" />
+			<button onclick="join(document.getElementsByTagName('input')[0].value, document.getElementsByTagName('input')[1].value)">Connect</button>
+		</div>
+		<table id="chat" style="width:100%">
+			<tr>
+				<td colspan="2" id="messages">
+				
+				</td>
+				<td rowspan="2">
+					<div id="clients"></div>
+				</td>
+			</tr>
+			<tr>
+				<td>
+					<input id="message" type="text" />
+				</td>
+				<td style="width:70px">
+					<button id="send">send</button>
+				</td>
+			</tr>
+		</table>
 	</body>
 </html>

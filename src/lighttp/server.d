@@ -5,100 +5,113 @@ import std.system : Endian;
 import libasync;
 
 import xbuffer;
-import xbuffer.memory : alloc, free;
+import xbuffer.memory : xalloc, xfree;
 
 import lighttp.router;
 import lighttp.util;
 
-class Server {
+private enum defaultName = "lighttp/0.1";
 
-	private EventLoop evl;
-	private Router router;
+/**
+ * Base class for servers.
+ */
+class ServerBase {
 
-	public immutable string name;
+	private string _name;
+	private EventLoop _eventLoop;
+	private Router _router;
 
-	this(R:Router)(EventLoop evl, R router, string name="lighttp") {
-		this.evl = evl;
+	this(R:Router)(EventLoop eventLoop, R router, string name=defaultName) {
+		_name = name;
+		_eventLoop = eventLoop;
 		registerRoutes(router);
-		this.router = router;
-		this.name = name;
+		_router = router;
 	}
 
-	this(R:Router)(R router, string name="lighttp") {
+	this(R:Router)(R router, string name=defaultName) {
 		this(getThreadEventLoop(), router, name);
 	}
 
-	@property EventLoop eventLoop() pure nothrow @safe @nogc {
-		return this.evl;
+	/**
+	 * Gets/sets the server's name. It it the value displayed in
+	 * the "Server" HTTP header value and in the footer of default
+	 * error message pages.
+	 */
+	@property string name() pure nothrow @safe @nogc {
+		return _name;
 	}
 
+	@property string name(string name) pure nothrow @safe @nogc {
+		return _name = name;
+	}
+
+	/**
+	 * Gets the server's event loop. It should be used to
+	 * run the server.
+	 * Example:
+	 * ---
+	 * auto server = new Server();
+	 * server.host("0.0.0.0");
+	 * while(true) server.eventLoop.loop();
+	 * ---
+	 */
+	@property EventLoop eventLoop() pure nothrow @safe @nogc {
+		return _eventLoop;
+	}
+
+	@property Router router() pure nothrow @safe @nogc {
+		return _router;
+	}
+
+	/**
+	 * Binds the server to the given address.
+	 * Example:
+	 * ---
+	 * server.host("0.0.0.0");
+	 * server.host("::1", 8080);
+	 * ---
+	 */
 	void host(string ip, ushort port) {
-		auto listener = new AsyncTCPListener(this.evl);
+		auto listener = new AsyncTCPListener(this.eventLoop);
 		listener.host(ip, port);
 		listener.run(&this.handler);
 	}
 
+	/// ditto
 	void host(string ip) {
 		return this.host(ip, this.defaultPort);
 	}
 
-	@property ushort defaultPort() pure nothrow @safe @nogc {
-		return 80;
+	/**
+	 * Gets the server's default port.
+	 */
+	abstract @property ushort defaultPort() pure nothrow @safe @nogc;
+
+	abstract void delegate(TCPEvent) handler(AsyncTCPConnection conn);
+
+}
+
+class ServerImpl(T:Connection, ushort _port) : ServerBase {
+
+	this(E...)(E args) { //TODO remove when default constructors are implemented
+		super(args);
 	}
 
-	void delegate(TCPEvent) handler(AsyncTCPConnection conn) {
-		auto ret = new Connection(conn);
+	override @property ushort defaultPort() {
+		return _port;
+	}
+
+	override void delegate(TCPEvent) handler(AsyncTCPConnection conn) {
+		Connection ret = new T(this, conn);
 		return &ret.handle;
 	}
 
-	class Connection {
-
-		AsyncTCPConnection conn;
-
-		private void delegate(TCPEvent) _handler;
-
-		this(AsyncTCPConnection conn) {
-			this.conn = conn;
-			_handler = &handleHTTP;
-		}
-
-		void handle(TCPEvent event) {
-			_handler(event);
-		}
-
-		void handleHTTP(TCPEvent event) {
-			if(event == TCPEvent.READ) {
-				auto req = new Typed!(immutable char)(16);
-				static ubyte[] buffer = new ubyte[4092];
-				while(true) {
-					auto len = this.conn.recv(buffer);
-					if(len > 0) req.write(buffer[0..len]);
-					if(len < buffer.length) break;
-				}
-				Request request = new Request();
-				Response response = new Response();
-				response.headers["Server"] = name;
-				HandleResult result;
-				if(request.parse(req.data)) {
-					try router.handle(result, this.conn, request, response);
-					catch(Exception) response.status = StatusCodes.internalServerError;
-				} else {
-					response.status = StatusCodes.badRequest;
-				}
-				if(response.status.code >= 400 && response.body_.length == 0) router.error(request, response);
-				this.conn.send(cast(ubyte[])response.toString());
-				if(result.connection is null) {
-					this.conn.kill();
-				} else {
-					_handler = &result.connection.handle;
-					result.connection.onStart();
-				}
-			}
-		}
-
-	}
-
 }
+
+/**
+ * Default HTTP server.
+ */
+alias Server = ServerImpl!(DefaultConnection, 80);
 
 class Connection {
 
@@ -107,11 +120,11 @@ class Connection {
 	protected Buffer buffer;
 
 	protected this(size_t bufferSize) {
-		this.buffer = alloc!Buffer(bufferSize);
+		this.buffer = xalloc!Buffer(bufferSize);
 	}
 
 	~this() {
-		free(this.buffer);
+		xfree(this.buffer);
 	}
 
 	void onStart() {}
@@ -130,6 +143,7 @@ class Connection {
 				break;
 			case CLOSE:
 				this.onClose();
+				//TODO schedule for destruction
 				break;
 			default:
 				break;
@@ -139,6 +153,47 @@ class Connection {
 	abstract void onRead();
 
 	abstract void onClose();
+
+}
+
+class DefaultConnection : Connection {
+
+	private ServerBase server;
+	void delegate() _handle;
+
+	this(ServerBase server, AsyncTCPConnection conn) {
+		super(1024);
+		this.server = server;
+		this.conn = conn;
+		_handle = &this.handle;
+	}
+
+	override void onRead() {
+		_handle();
+	}
+
+	void handle() {
+		Request request = new Request();
+		Response response = new Response();
+		response.headers["Server"] = this.server.name;
+		HandleResult result;
+		if(request.parse(this.buffer.data!char)) {
+			try this.server.router.handle(result, this.conn, request, response);
+			catch(Exception) response.status = StatusCodes.internalServerError;
+		} else {
+			response.status = StatusCodes.badRequest;
+		}
+		if(response.status.code >= 400 && response.body_.length == 0) this.server.router.error(request, response);
+		this.conn.send(cast(ubyte[])response.toString());
+		if(result.connection is null) {
+			this.conn.kill();
+		} else {
+			_handle = &result.connection.onRead;
+			result.connection.onStart();
+		}
+	}
+
+	override void onClose() {}
 
 }
 

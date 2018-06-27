@@ -2,7 +2,7 @@
 
 import std.algorithm : max;
 import std.base64 : Base64;
-import std.conv : to;
+import std.conv : to, ConvException;
 import std.digest.sha : sha1Of;
 import std.regex : Regex, isRegexFor, regex, matchAll;
 import std.string : startsWith, join;
@@ -38,12 +38,19 @@ class Router {
 			res.status = StatusCodes.notFound;
 		}
 	}
-	
+
+	/**
+	 * Handles a client or server error and displays an error
+	 * page to the client.
+	 */
 	void error(Request req, Response res) {
 		res.headers["Content-Type"] = "text/html";
 		res.body_ = "<!DOCTYPE html><html><head><title>" ~ res.status.message ~ "</title></head><body><center><h1>" ~ res.status.toString() ~ "</h1></center><hr><center>lighttp/0.1</center></body></html>";
 	}
-	
+
+	/**
+	 * Adds a route.
+	 */
 	void add(T, E...)(RouteInfo!T info, void delegate(E) del) {
 		this.routes[info.method] ~= new RouteOf!(T, E)(info.path, del);
 	}
