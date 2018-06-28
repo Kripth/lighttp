@@ -15,21 +15,20 @@ private enum defaultName = "lighttp/0.1";
 /**
  * Base class for servers.
  */
-class ServerBase {
+abstract class ServerBase {
 
 	private string _name;
 	private EventLoop _eventLoop;
 	private Router _router;
 
-	this(R:Router)(EventLoop eventLoop, R router, string name=defaultName) {
+	this(EventLoop eventLoop, string name=defaultName) {
 		_name = name;
 		_eventLoop = eventLoop;
-		registerRoutes(router);
-		_router = router;
+		_router = new Router();
 	}
 
-	this(R:Router)(R router, string name=defaultName) {
-		this(getThreadEventLoop(), router, name);
+	this(string name=defaultName) {
+		this(getThreadEventLoop(), name);
 	}
 
 	/**
@@ -59,9 +58,17 @@ class ServerBase {
 		return _eventLoop;
 	}
 
+	/**
+	 * Gets the server's router.
+	 */
 	@property Router router() pure nothrow @safe @nogc {
 		return _router;
 	}
+	
+	/**
+	 * Gets the server's default port.
+	 */
+	abstract @property ushort defaultPort() pure nothrow @safe @nogc;
 
 	/**
 	 * Binds the server to the given address.
@@ -83,9 +90,19 @@ class ServerBase {
 	}
 
 	/**
-	 * Gets the server's default port.
+	 * Calls eventLoop.loop until the given condition
+	 * is true.
 	 */
-	abstract @property ushort defaultPort() pure nothrow @safe @nogc;
+	void loop(bool delegate() condition) {
+		while(condition()) this.eventLoop.loop();
+	}
+
+	/**
+	 * Calls eventLoop.loop in an infinite loop.
+	 */
+	void loop() {
+		while(true) this.eventLoop.loop();
+	}
 
 	abstract void delegate(TCPEvent) handler(AsyncTCPConnection conn);
 
@@ -110,6 +127,12 @@ class ServerImpl(T:Connection, ushort _port) : ServerBase {
 
 /**
  * Default HTTP server.
+ * Example:
+ * ---
+ * auto server = new Server();
+ * server.host("0.0.0.0");
+ * server.loop();
+ * ---
  */
 alias Server = ServerImpl!(DefaultConnection, 80);
 
@@ -183,7 +206,7 @@ class DefaultConnection : Connection {
 		} else {
 			response.status = StatusCodes.badRequest;
 		}
-		if(response.status.code >= 400 && response.body_.length == 0) this.server.router.error(request, response);
+		if(response.status.code >= 400 && response.body_.length == 0) this.server.router.handleError(request, response);
 		this.conn.send(cast(ubyte[])response.toString());
 		if(result.connection is null) {
 			this.conn.kill();

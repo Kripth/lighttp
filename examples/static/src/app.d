@@ -18,14 +18,14 @@ void main(string[] args) {
 	
 	getopt(args, "path", &path, "ip", &ip, "port", &port);
 
-	auto server = new Server(new StaticRouter(path));
+	auto server = new Server();
 	server.host(ip, port);
-	
-	while(true) server.eventLoop.loop();
+	server.router.add(new StaticRouter(path));
+	server.loop();
 
 }
 
-class StaticRouter : Router {
+class StaticRouter {
 
 	private immutable string path;
 	

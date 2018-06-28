@@ -508,14 +508,22 @@ class CachedResource : Resource {
 
 }
 
-auto path(paths...)() {
-	static if(paths.length == 1 && is(typeof(paths[0]) == string[])) {
-		return ctRegex!(paths[0].join(`\/`));
-	} else {
-		static if(is(typeof(paths[0]) == string[])) {
-			return path!(paths[0] ~ paths[1], paths[2..$]);
-		} else {
-			return path!([paths[0]], paths[1..$]);
-		}
+class TemplatedResource : Resource {
+
+	private string tdata;
+
+	public this(string mime, size_t thresold=512) {
+		super(mime, thresold);
 	}
+	
+	public this(string mime, in void[] data) {
+		this(mime);
+		this.tdata = cast(string)data; //TODO parse
+	}
+
+	public Resource apply(string[string] dictionary) {
+		this.data = tdata; //TODO replace
+		return this;
+	}
+
 }

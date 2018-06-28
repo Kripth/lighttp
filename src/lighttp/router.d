@@ -20,17 +20,38 @@ struct HandleResult {
 
 }
 
+/**
+ * Router for handling requests.
+ */
 class Router {
+
+	private static string indexPage;
+	private static TemplatedResource errorPage;
+
+	static this() {
+		indexPage = import("index.html");
+		errorPage = new TemplatedResource("text/html", import("error.html"));
+	}
 
 	private Route[][string] routes;
 
+	private void delegate(Request, Response) _errorHandler;
+
+	this() {
+		this.add("GET", "", new Resource("text/html", indexPage));
+		_errorHandler = &this.defaultErrorHandler;
+	}
+
+	/*
+	 * Handles a connection.
+	 */
 	void handle(ref HandleResult result, AsyncTCPConnection conn, Request req, Response res) {
 		if(!req.path.startsWith("/")) {
 			res.status = StatusCodes.badRequest;
 		} else {
 			auto routes = req.method in this.routes;
 			if(routes) {
-				foreach(route ; *routes) {
+				foreach_reverse(route ; *routes) {
 					route.handle(result, conn, req, res);
 					if(result.success) return;
 				}
@@ -39,13 +60,44 @@ class Router {
 		}
 	}
 
-	/**
+	/*
 	 * Handles a client or server error and displays an error
 	 * page to the client.
 	 */
-	void error(Request req, Response res) {
-		res.headers["Content-Type"] = "text/html";
-		res.body_ = "<!DOCTYPE html><html><head><title>" ~ res.status.message ~ "</title></head><body><center><h1>" ~ res.status.toString() ~ "</h1></center><hr><center>lighttp/0.1</center></body></html>";
+	void handleError(Request req, Response res) {
+		_errorHandler(req, res);
+	}
+
+	private void defaultErrorHandler(Request req, Response res) {
+		errorPage.apply(["message": res.status.message, "error": res.status.toString(), "server": "lighttp"]).apply(req, res);
+	}
+
+	/**
+	 * Registers routes from a class's methods marked with the
+	 * @Get, @Post and @CustomMethod attributes.
+	 */
+	void add(T)(T routes) {
+		foreach(member ; __traits(allMembers, T)) {
+			static if(__traits(getProtection, __traits(getMember, T, member)) == "public") {
+				foreach(uda ; __traits(getAttributes, __traits(getMember, T, member))) {
+					static if(is(typeof(uda)) && isRouteInfo!(typeof(uda))) {
+						mixin("alias M = routes." ~ member ~ ";");
+						static if(is(typeof(__traits(getMember, T, member)) == function)) {
+							// function
+							static if(hasUDA!(__traits(getMember, T, member), Multipart)) this.addMultipart(uda, mixin("&routes." ~ member));
+							else this.add(uda, mixin("&routes." ~ member));
+						} else static if(is(M == class)) {
+							// websocket
+							static if(__traits(isNested, M)) this.addWebSocket!M(uda, { return routes.new M(); });
+							else this.addWebSocket!M(uda);
+						} else {
+							// member
+							this.add(uda, mixin("routes." ~ member));
+						}
+					}
+				}
+			}
+		}
 	}
 
 	/**
@@ -273,7 +325,7 @@ auto Post(R...)(R path){ return routeInfo!R("POST", path); }
 
 enum Multipart;
 
-void registerRoutes(R:Router)(R router) {
+void registerRoutes(R)(Router register, R router) {
 
 	foreach(member ; __traits(allMembers, R)) {
 		static if(__traits(getProtection, __traits(getMember, R, member)) == "public") {
@@ -282,15 +334,15 @@ void registerRoutes(R:Router)(R router) {
 					mixin("alias M = router." ~ member ~ ";");
 					static if(is(typeof(__traits(getMember, R, member)) == function)) {
 						// function
-						static if(hasUDA!(__traits(getMember, R, member), Multipart)) router.addMultipart(uda, mixin("&router." ~ member));
-						else router.add(uda, mixin("&router." ~ member));
+						static if(hasUDA!(__traits(getMember, R, member), Multipart)) register.addMultipart(uda, mixin("&router." ~ member));
+						else register.add(uda, mixin("&router." ~ member));
 					} else static if(is(M == class)) {
 						// websocket
-						static if(__traits(isNested, M)) router.addWebSocket!M(uda, { return router.new M(); });
-						else router.addWebSocket!M(uda);
+						static if(__traits(isNested, M)) register.addWebSocket!M(uda, { return router.new M(); });
+						else register.addWebSocket!M(uda);
 					} else {
 						// member
-						router.add(uda, mixin("router." ~ member));
+						register.add(uda, mixin("router." ~ member));
 					}
 				}
 			}

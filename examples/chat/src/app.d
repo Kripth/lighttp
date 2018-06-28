@@ -11,12 +11,12 @@ void main(string[] args) {
 	auto server = new Server(new Chat());
 	server.host("0.0.0.0", 80);
 	server.host("::", 80);
-	
-	while(true) server.eventLoop.loop();
+	server.router.add(new Chat());
+	server.loop();
 
 }
 
-class Chat : Router {
+class Chat {
 
 	@Get("") Resource index;
 	
