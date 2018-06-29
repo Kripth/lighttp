@@ -10,7 +10,7 @@ import xbuffer.memory : xalloc, xfree;
 import lighttp.router;
 import lighttp.util;
 
-private enum defaultName = "lighttp/0.1";
+private enum defaultName = "lighttp/0.2";
 
 /**
  * Base class for servers.

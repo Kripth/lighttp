@@ -2,14 +2,11 @@
 
 import std.array : Appender;
 import std.conv : to, ConvException;
-import std.base64 : Base64URLNoPadding;
-import std.digest.crc : crc32Of;
 import std.json : JSONValue;
 import std.regex : ctRegex;
-import std.string : toUpper, toLower, split, join, strip, indexOf;
+import std.string : toUpper, toLower, split, join, strip;
 import std.traits : EnumMembers;
 import std.uri : encode, decode;
-import std.zlib : HeaderFormat, Compress;
 
 /**
  * Indicates the status of an HTTP response.
@@ -432,98 +429,4 @@ private bool decodeHTTP(string str, ref string status, ref string[string] header
 	} else {
 		return false;
 	}
-}
-
-class Resource {
-
-	private immutable string mime;
-
-	public immutable size_t thresold;
-	
-	public const(void)[] uncompressed;
-	public const(void)[] compressed = null;
-
-	public this(string mime, size_t thresold=512) {
-		this.mime = mime;
-		this.thresold = thresold;
-	}
-
-	public this(string mime, in void[] data) {
-		this(mime);
-		this.data = data;
-	}
-
-	public @property const(void)[] data(in void[] data) {
-		this.uncompressed = data;
-		if(data.length >= this.thresold) this.compress();
-		else this.compressed = null;
-		return this.uncompressed;
-	}
-	
-	private void compress() {
-		Compress compress = new Compress(6, HeaderFormat.gzip);
-		auto data = compress.compress(this.uncompressed);
-		data ~= compress.flush();
-		this.compressed = data;
-	}
-
-	public void apply(Request req, Response res) {
-		if(this.compressed !is null && req.headers.get("accept-encoding", "").indexOf("gzip") != -1) {
-			res.headers["Content-Encoding"] = "gzip";
-			res.body_ = cast(string)this.compressed;
-		} else {
-			res.body_ = cast(string)this.uncompressed;
-		}
-		res.headers["Content-Type"] = this.mime;
-	}
-	
-}
-
-class CachedResource : Resource {
-
-	private string etag;
-
-	public this(string mime, size_t thresold=512) {
-		super(mime, thresold);
-	}
-	
-	public this(string mime, in void[] data) {
-		super(mime, data);
-	}
-
-	public override @property const(void)[] data(in void[] data) {
-		this.etag = Base64URLNoPadding.encode(crc32Of(data));
-		return super.data(data);
-	}
-
-	public override void apply(Request req, Response res) {
-		if(req.headers.get("if-none-match", "") == this.etag) {
-			res.status = StatusCodes.notModified;
-		} else {
-			super.apply(req, res);
-			res.headers["Cache-Control"] = "public, max-age=31536000";
-			res.headers["ETag"] = this.etag;
-		}
-	}
-
-}
-
-class TemplatedResource : Resource {
-
-	private string tdata;
-
-	public this(string mime, size_t thresold=512) {
-		super(mime, thresold);
-	}
-	
-	public this(string mime, in void[] data) {
-		this(mime);
-		this.tdata = cast(string)data; //TODO parse
-	}
-
-	public Resource apply(string[string] dictionary) {
-		this.data = tdata; //TODO replace
-		return this;
-	}
-
 }

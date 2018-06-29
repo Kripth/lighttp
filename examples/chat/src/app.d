@@ -8,9 +8,9 @@ import lighttp;
 
 void main(string[] args) {
 
-	auto server = new Server(new Chat());
-	server.host("0.0.0.0", 80);
-	server.host("::", 80);
+	auto server = new Server();
+	server.host("0.0.0.0");
+	server.host("::");
 	server.router.add(new Chat());
 	server.loop();
 

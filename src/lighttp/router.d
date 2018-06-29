@@ -10,6 +10,7 @@ import std.traits : Parameters, hasUDA;
 
 import libasync : NetworkAddress, AsyncTCPConnection;
 
+import lighttp.resource;
 import lighttp.server : Connection, MultipartConnection, WebSocketConnection;
 import lighttp.util;
 
@@ -25,11 +26,11 @@ struct HandleResult {
  */
 class Router {
 
-	private static string indexPage;
+	private static Resource indexPage;
 	private static TemplatedResource errorPage;
 
 	static this() {
-		indexPage = import("index.html");
+		indexPage = new Resource("text/html", import("index.html"));
 		errorPage = new TemplatedResource("text/html", import("error.html"));
 	}
 
@@ -38,7 +39,7 @@ class Router {
 	private void delegate(Request, Response) _errorHandler;
 
 	this() {
-		this.add("GET", "", new Resource("text/html", indexPage));
+		this.add("GET", "", indexPage);
 		_errorHandler = &this.defaultErrorHandler;
 	}
 
@@ -69,7 +70,7 @@ class Router {
 	}
 
 	private void defaultErrorHandler(Request req, Response res) {
-		errorPage.apply(["message": res.status.message, "error": res.status.toString(), "server": "lighttp"]).apply(req, res);
+		errorPage.apply(["message": res.status.message, "error": res.status.toString(), "server": res.headers.get("Server", "lighttp")]).apply(req, res);
 	}
 
 	/**

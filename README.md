@@ -1,6 +1,5 @@
-<img align="right" alt="Logo" width="100" src="https://i.imgur.com/kWWtW6I.png">
-
 lighttp
+<img align="right" alt="Logo" width="100" src="https://i.imgur.com/kWWtW6I.png">
 =======
 
 [![DUB Package](https://img.shields.io/dub/v/lighttp.svg)](https://code.dlang.org/packages/lighttp)
@@ -17,8 +16,8 @@ void main(string[] args) {
 	server.host("0.0.0.0");
 	server.host("::");
 	server.router.add(new Router());
-	
-	while(true) server.eventLoop.loop();
+	server.router.add("GET", "welcome", new Resource("text/html", read("welcome.html")));
+	server.loop();
 
 }
 
