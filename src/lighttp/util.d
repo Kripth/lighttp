@@ -4,7 +4,7 @@ import std.array : Appender;
 import std.conv : to, ConvException;
 import std.json : JSONValue;
 import std.regex : ctRegex;
-import std.string : toUpper, toLower, split, join, strip;
+import std.string : toUpper, toLower, split, join, strip, indexOf;
 import std.traits : EnumMembers;
 import std.uri : encode, decode;
 
@@ -118,6 +118,9 @@ enum StatusCodes : Status {
 	
 }
 
+/**
+ * Base class for request and response. Contains common properties.
+ */
 abstract class HTTP {
 
 	enum VERSION = "HTTP/1.1";
@@ -128,24 +131,29 @@ abstract class HTTP {
 	/**
 	 * Method used.
 	 */
-	string method;
+	public string method;
 
 	/**
 	 * Headers of the request/response.
 	 */
-	string[string] headers;
-
+	public string[string] headers;
+	
 	protected string _body;
 
-	@property string body_() pure nothrow @safe @nogc {
-		return _body;
+	public this() {}
+
+	public this(string method, string[string] headers) {
+		this.method = method;
+		this.headers = headers;
 	}
 
-	/*@property string body_(in void[] data) pure nothrow @nogc {
-		return _body = cast(string)data;
-	}*/
+	public @property string body_() pure nothrow @safe @nogc {
+		return _body;
+	}
+	
+	static if(__VERSION__ >= 2078) alias body = body_;
 
-	@property string body_(T)(T data) {
+	public @property string body_(T)(T data) {
 		static if(is(T : string)) {
 			return _body = cast(string)data;
 		} else static if(is(T == JSONValue)) {
@@ -157,8 +165,6 @@ abstract class HTTP {
 			return _body = data.to!string;
 		}
 	}
-
-	static if(__VERSION__ >= 2078) alias body = body_;
 
 }
 
@@ -173,57 +179,52 @@ enum defaultHeaders = (string[string]).init;
  * ---
  */
 class Request : HTTP {
-	
-	/**
-	 * Path of the request. It should start with a slash.
-	 */
-	string path;
 
-	public this() {}
+	private string _path;
+
+	/**
+	 * Query of the request. The part or the path after the
+	 * question mark.
+	 */
+	public string[string] query;
+
+	public this() {
+		super();
+	}
 	
 	public this(string method, string path, string[string] headers=defaultHeaders) {
-		this.method = method;
+		super(method, headers);
 		this.path = path;
-		this.headers = headers;
 	}
-	
+
 	/**
-	 * Creates a get request.
-	 * Example:
-	 * ---
-	 * auto get = Request.get("/index.html", ["Host": "127.0.0.1"]);
-	 * assert(get.toString() == "GET /index.html HTTP/1.1\r\nHost: 127.0.0.1\r\n");
-	 * ---
+	 * Gets the path of the request.
 	 */
-	public static Request get(string path, string[string] headers=defaultHeaders) {
-		return new Request(GET, path, headers);
+	public @property string path() pure nothrow @safe @nogc {
+		return _path;
 	}
-	
-	/**
-	 * Creates a post request.
-	 * Example:
-	 * ---
-	 * auto post = Request.post("/sub.php", ["Connection": "Keep-Alive"], "name=Mark&surname=White");
-	 * assert(post.toString() == "POST /sub.php HTTP/1.1\r\nConnection: Keep-Alive\r\n\r\nname=Mark&surname=White");
-	 * ---
-	 */
-	public static Request post(string path, string[string] headers=defaultHeaders, string body_="") {
-		Request request = new Request(POST, path, headers);
-		request.body_ = body_;
-		return request;
-	}
-	
-	/// ditto
-	public static Request post(string path, string data, string[string] headers=defaultHeaders) {
-		return post(path, headers, data);
+
+	private @property string path(string path) {
+		immutable qm = path.indexOf("?");
+		if(qm == -1) {
+			_path = path;
+		} else {
+			_path = path[0..qm];
+			foreach(query ; path[qm+1..$].split("&")) {
+				immutable eq = query.indexOf("=");
+				if(eq > 0) this.query[query[0..eq]] = query[eq+1..$];
+			}
+		}
+		return _path;
 	}
 	
 	/**
 	 * Encodes the request into a string.
+	 * The `Content-Length` header property is always added automatically.
 	 * Example:
 	 * ---
-	 * auto request = new Request(Request.GET, "index.html", ["Connection": "Keep-Alive"]);
-	 * assert(request.toString() == "GET /index.html HTTP/1.1\r\nConnection: Keep-Alive\r\n");
+	 * auto request = new Request(Request.GET, "index.html");
+	 * assert(request.toString() == "GET /index.html HTTP/1.1\r\nContent-Length: 0\r\n");
 	 * ---
 	 */
 	public override string toString() {
@@ -232,14 +233,13 @@ class Request : HTTP {
 	}
 	
 	/**
-	 * Parses a string and returns a Request.
-	 * If the request is successfully parsed Request.valid will be true.
+	 * Parses a string and returns whether the request was valid.
 	 * Please note that every key in the header is converted to lowercase for
 	 * an easier search in the associative array.
 	 * Example:
 	 * ---
-	 * auto request = Request.parse("GET /index.html HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: Keep-Alive\r\n");
-	 * assert(request.valid);
+	 * Request request = new Request();
+	 * assert(request.parse("GET /index.html HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: Keep-Alive\r\n"));
 	 * assert(request.method == Request.GET);
 	 * assert(request.headers["Host"] == "127.0.0.1");
 	 * assert(request.headers["Connection"] == "Keep-Alive");
