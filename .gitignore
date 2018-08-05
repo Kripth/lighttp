@@ -8,3 +8,4 @@
 *.lst
 *-test-library
 src/app.d
+lighttp

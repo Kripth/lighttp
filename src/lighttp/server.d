@@ -55,7 +55,7 @@ abstract class ServerBase {
 	 * ---
 	 * auto server = new Server();
 	 * server.host("0.0.0.0");
-	 * while(true) server.eventLoop.loop();
+	 * server.eventLoop.run();
 	 * ---
 	 */
 	@property EventLoop eventLoop() pure nothrow @safe @nogc {
@@ -100,7 +100,15 @@ abstract class ServerBase {
 		return this.host(ip, this.defaultPort);
 	}
 
-	abstract void handler(TcpListener sender, TcpStream client);
+	public void run() {
+		this.eventLoop.run();
+	}
+
+	public void stop() {
+		this.eventLoop.stop();
+	}
+
+	protected abstract void handler(TcpListener sender, TcpStream client);
 
 }
 
@@ -137,24 +145,13 @@ class Connection {
 
 	TcpStream client;
 
-	protected Buffer buffer;
-
-	protected this(size_t bufferSize) {
-		this.buffer = xalloc!Buffer(bufferSize);
-	}
-
-	~this() {
-		xfree(this.buffer);
-	}
-
 	void onStart() {}
 
 	final void handle(in ubyte[] data) {
-		this.buffer.data = data;
-		this.onRead();
+		this.onRead(data);
 	}
 
-	abstract void onRead();
+	abstract void onRead(in ubyte[] data);
 
 	abstract void onClose();
 
@@ -163,25 +160,25 @@ class Connection {
 class DefaultConnection : Connection {
 
 	private ServerBase server;
-	void delegate() _handle;
+	void delegate(in ubyte[]) _handle;
 
 	this(ServerBase server, TcpStream client) {
-		super(1024);
 		this.server = server;
 		this.client = client;
-		_handle = &this.handle;
+		_handle = &this.handleRequest;
 	}
 
-	override void onRead() {
-		_handle();
+	override void onRead(in ubyte[] data) {
+		_handle(data);
 	}
 
-	void handle() {
+	void handleRequest(in ubyte[] data) {
 		Request request = new Request();
 		Response response = new Response();
 		response.headers["Server"] = this.server.name;
 		HandleResult result;
-		if(request.parse(this.buffer.data!char)) {
+		if(request.parse(cast(string)data)) {
+			debug writeln(request.method, " ", request.path);
 			try this.server.router.handle(result, this.client, request, response);
 			catch(Exception) response.status = StatusCodes.internalServerError;
 		} else {
@@ -208,15 +205,14 @@ class MultipartConnection : Connection {
 	void delegate() callback;
 
 	this(TcpStream client, size_t length, Request req, void delegate() callback) {
-		super(4096);
 		this.client = client;
 		this.length = length;
 		this.req = req;
 		this.callback = callback;
 	}
 
-	override void onRead() {
-		this.req.body_ = this.req.body_ ~ this.buffer.data!char.idup;
+	override void onRead(in ubyte[] data) {
+		this.req.body_ = this.req.body_ ~ cast(string)data;
 		if(this.req.body_.length >= this.length) {
 			this.callback();
 			this.client.close();
@@ -234,8 +230,10 @@ class WebSocketConnection : Connection {
 
 	void delegate() onStartImpl;
 
+	private Buffer buffer;
+
 	this() {
-		super(1024);
+		this.buffer = new Buffer(1024);
 		this.onStartImpl = {};
 	}
 
@@ -243,7 +241,8 @@ class WebSocketConnection : Connection {
 		this.onStartImpl();
 	}
 
-	override void onRead() {
+	override void onRead(in ubyte[] data_) {
+		this.buffer.data = data_;
 		try if((this.buffer.read!ubyte() & 0b1111) == 1) {
 			immutable info = this.buffer.read!ubyte();
 			immutable masked = (info & 0b10000000) != 0;

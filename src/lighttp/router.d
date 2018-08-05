@@ -192,7 +192,7 @@ class RouteImpl(T, E...) if(is(T == string) || isRegexFor!(T, string)) : Route {
 	
 	void callImpl(void delegate(E) del, TcpStream client, Request req, Response res, Match match) {
 		Args args;
-		//static if(__address != -1) args[__address] = client.socket.remoteAddress;
+		static if(__address != -1) args[__address] = client.remoteAddress;
 		static if(__request != -1) args[__request] = req;
 		static if(__response != -1) args[__response] = res;
 		del(args, match);
