@@ -5,10 +5,11 @@ import std.base64 : Base64;
 import std.conv : to, ConvException;
 import std.digest.sha : sha1Of;
 import std.regex : Regex, isRegexFor, regex, matchAll;
+import std.socket : Address;
 import std.string : startsWith, join;
 import std.traits : Parameters, hasUDA;
 
-import libasync : NetworkAddress, AsyncTCPConnection;
+import kiss.net : TcpStream;
 
 import lighttp.resource;
 import lighttp.server : Connection, MultipartConnection, WebSocketConnection;
@@ -46,14 +47,14 @@ class Router {
 	/*
 	 * Handles a connection.
 	 */
-	void handle(ref HandleResult result, AsyncTCPConnection conn, Request req, Response res) {
+	void handle(ref HandleResult result, TcpStream client, Request req, Response res) {
 		if(!req.path.startsWith("/")) {
 			res.status = StatusCodes.badRequest;
 		} else {
 			auto routes = req.method in this.routes;
 			if(routes) {
 				foreach_reverse(route ; *routes) {
-					route.handle(result, conn, req, res);
+					route.handle(result, client, req, res);
 					if(result.success) return;
 				}
 			}
@@ -141,7 +142,7 @@ class Router {
 
 class Route {
 
-	abstract void handle(ref HandleResult result, AsyncTCPConnection conn, Request req, Response res);
+	abstract void handle(ref HandleResult result, TcpStream client, Request req, Response res);
 
 }
 
@@ -150,7 +151,7 @@ class RouteImpl(T, E...) if(is(T == string) || isRegexFor!(T, string)) : Route {
 	private T path;
 	
 	static if(E.length) {
-		static if(is(E[0] == NetworkAddress)) {
+		static if(is(E[0] == Address)) {
 			enum __address = 0;
 			static if(E.length > 1) {
 				static if(is(E[1] == Request)) {
@@ -189,20 +190,20 @@ class RouteImpl(T, E...) if(is(T == string) || isRegexFor!(T, string)) : Route {
 		this.path = path;
 	}
 	
-	void callImpl(void delegate(E) del, AsyncTCPConnection conn, Request req, Response res, Match match) {
+	void callImpl(void delegate(E) del, TcpStream client, Request req, Response res, Match match) {
 		Args args;
-		static if(__address != -1) args[__address] = conn.local;
+		//static if(__address != -1) args[__address] = client.socket.remoteAddress;
 		static if(__request != -1) args[__request] = req;
 		static if(__response != -1) args[__response] = res;
 		del(args, match);
 	}
 	
-	abstract void call(ref HandleResult result, AsyncTCPConnection conn, Request req, Response res, Match match);
+	abstract void call(ref HandleResult result, TcpStream client, Request req, Response res, Match match);
 	
-	override void handle(ref HandleResult result, AsyncTCPConnection conn, Request req, Response res) {
+	override void handle(ref HandleResult result, TcpStream client, Request req, Response res) {
 		static if(is(T == string)) {
 			if(req.path[1..$] == this.path) {
-				this.call(result, conn, req, res);
+				this.call(result, client, req, res);
 				result.success = true;
 			}
 		} else {
@@ -219,7 +220,7 @@ class RouteImpl(T, E...) if(is(T == string) || isRegexFor!(T, string)) : Route {
 						args[i] = to!(Match[i])(matches[i+1]);
 					}
 				}
-				this.call(result, conn, req, res, args);
+				this.call(result, client, req, res, args);
 				result.success = true;
 			}
 		}
@@ -236,8 +237,8 @@ class RouteOf(T, E...) : RouteImpl!(T, E) {
 		this.del = del;
 	}
 	
-	override void call(ref HandleResult result, AsyncTCPConnection conn, Request req, Response res, Match match) {
-		this.callImpl(this.del, conn, req, res, match);
+	override void call(ref HandleResult result, TcpStream client, Request req, Response res, Match match) {
+		this.callImpl(this.del, client, req, res, match);
 	}
 	
 }
@@ -248,16 +249,16 @@ class MultipartRouteOf(T, E...) : RouteOf!(T, E) {
 		super(path, del);
 	}
 
-	override void call(ref HandleResult result, AsyncTCPConnection conn, Request req, Response res, Match match) {
+	override void call(ref HandleResult result, TcpStream client, Request req, Response res, Match match) {
 		auto lstr = "content-length" in req.headers;
 		if(lstr) {
 			try {
 				size_t length = to!size_t(*lstr);
 				if(req.body_.length >= length) {
-					return super.call(result, conn, req, res, match);
+					return super.call(result, client, req, res, match);
 				} else {
 					// wait for full data
-					result.connection = new MultipartConnection(conn, length, req, { super.call(result, conn, req, res, match); });
+					result.connection = new MultipartConnection(client, length, req, { super.call(result, client, req, res, match); });
 					return;
 				}
 			} catch(ConvException) {}
@@ -277,7 +278,7 @@ class WebSocketRouteOf(WebSocket, T, E...) : RouteImpl!(T, E) {
 		this.createWebSocket = createWebSocket;
 	}
 
-	override void call(ref HandleResult result, AsyncTCPConnection conn, Request req, Response res, Match match) {
+	override void call(ref HandleResult result, TcpStream client, Request req, Response res, Match match) {
 		auto key = "sec-websocket-key" in req.headers;
 		if(key) {
 			res.status = StatusCodes.switchingProtocols;
@@ -286,9 +287,9 @@ class WebSocketRouteOf(WebSocket, T, E...) : RouteImpl!(T, E) {
 			res.headers["Upgrade"] = "websocket";
 			// create web socket and set callback for onConnect
 			WebSocket webSocket = this.createWebSocket();
-			webSocket.conn = conn;
+			webSocket.client = client;
 			result.connection = webSocket;
-			static if(__traits(hasMember, WebSocket, "onConnect")) webSocket.onStartImpl = { this.callImpl(&webSocket.onConnect, conn, req, res, match); };
+			static if(__traits(hasMember, WebSocket, "onConnect")) webSocket.onStartImpl = { this.callImpl(&webSocket.onConnect, client, req, res, match); };
 		} else {
 			res.status = StatusCodes.notFound;
 		}
