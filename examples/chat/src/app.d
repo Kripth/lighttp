@@ -12,7 +12,7 @@ void main(string[] args) {
 	server.host("0.0.0.0");
 	server.host("::");
 	server.router.add(new Chat());
-	server.loop();
+	server.run();
 
 }
 
@@ -35,9 +35,9 @@ class Chat {
 		public string name;
 		private Room* room;
 		
-		void onConnect(NetworkAddress address, string room, string name) {
+		void onConnect(Address address, string room, string name) {
 			this.id = _id++;
-			this.ip = address.toAddressString();
+			this.ip = address.toAddrString();
 			this.name = name;
 			if(room !in rooms) rooms[room] = new Room();
 			this.room = room in rooms;

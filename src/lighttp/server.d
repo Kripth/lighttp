@@ -100,10 +100,16 @@ abstract class ServerBase {
 		return this.host(ip, this.defaultPort);
 	}
 
+	/**
+	 * Runs the event loop.
+	 */
 	public void run() {
 		this.eventLoop.run();
 	}
 
+	/**
+	 * Stops the event loop.
+	 */
 	public void stop() {
 		this.eventLoop.stop();
 	}
