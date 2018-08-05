@@ -17,7 +17,7 @@ void main(string[] args) {
 	server.host("::");
 	server.router.add(new Router());
 	server.router.add("GET", "welcome", new Resource("text/html", read("welcome.html")));
-	server.loop();
+	server.run();
 
 }
 

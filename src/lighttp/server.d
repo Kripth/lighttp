@@ -1,8 +1,10 @@
 ﻿module lighttp.server;
 
+import std.socket : Address, parseAddress;
 import std.system : Endian;
 
-import libasync;
+import kiss.event : EventLoop;
+import kiss.net : TcpListener, TcpStream;
 
 import xbuffer;
 import xbuffer.memory : xalloc, xfree;
@@ -11,6 +13,8 @@ import lighttp.router;
 import lighttp.util;
 
 private enum defaultName = "lighttp/0.2";
+
+import std.stdio : writeln;
 
 /**
  * Base class for servers.
@@ -28,7 +32,7 @@ abstract class ServerBase {
 	}
 
 	this(string name=defaultName) {
-		this(getThreadEventLoop(), name);
+		this(new EventLoop(), name);
 	}
 
 	/**
@@ -51,7 +55,7 @@ abstract class ServerBase {
 	 * ---
 	 * auto server = new Server();
 	 * server.host("0.0.0.0");
-	 * while(true) server.eventLoop.loop();
+	 * server.eventLoop.run();
 	 * ---
 	 */
 	@property EventLoop eventLoop() pure nothrow @safe @nogc {
@@ -78,10 +82,17 @@ abstract class ServerBase {
 	 * server.host("::1", 8080);
 	 * ---
 	 */
+	public void host(Address address) {
+		TcpListener listener = new TcpListener(this.eventLoop, address.addressFamily);
+		listener.onConnectionAccepted(&this.handler);
+		listener.bind(address);
+		listener.listen(1024);
+		listener.start();
+	}
+
+	/// ditto
 	void host(string ip, ushort port) {
-		auto listener = new AsyncTCPListener(this.eventLoop);
-		listener.host(ip, port);
-		listener.run(&this.handler);
+		this.host(parseAddress(ip, port));
 	}
 
 	/// ditto
@@ -90,21 +101,20 @@ abstract class ServerBase {
 	}
 
 	/**
-	 * Calls eventLoop.loop until the given condition
-	 * is true.
+	 * Runs the event loop.
 	 */
-	void loop(bool delegate() condition) {
-		while(condition()) this.eventLoop.loop();
+	public void run() {
+		this.eventLoop.run();
 	}
 
 	/**
-	 * Calls eventLoop.loop in an infinite loop.
+	 * Stops the event loop.
 	 */
-	void loop() {
-		while(true) this.eventLoop.loop();
+	public void stop() {
+		this.eventLoop.stop();
 	}
 
-	abstract void delegate(TCPEvent) handler(AsyncTCPConnection conn);
+	protected abstract void handler(TcpListener sender, TcpStream client);
 
 }
 
@@ -118,9 +128,10 @@ class ServerImpl(T:Connection, ushort _port) : ServerBase {
 		return _port;
 	}
 
-	override void delegate(TCPEvent) handler(AsyncTCPConnection conn) {
-		Connection ret = new T(this, conn);
-		return &ret.handle;
+	override void handler(TcpListener sender, TcpStream client) {
+		Connection ret = new T(this, client);
+		client.onDataReceived(&ret.handle);
+		client.onClosed(&ret.onClose);
 	}
 
 }
@@ -138,42 +149,15 @@ alias Server = ServerImpl!(DefaultConnection, 80);
 
 class Connection {
 
-	AsyncTCPConnection conn;
-
-	protected Buffer buffer;
-
-	protected this(size_t bufferSize) {
-		this.buffer = xalloc!Buffer(bufferSize);
-	}
-
-	~this() {
-		xfree(this.buffer);
-	}
+	TcpStream client;
 
 	void onStart() {}
 
-	final void handle(TCPEvent event) {
-		switch(event) with(TCPEvent) {
-			case READ:
-				this.buffer.reset();
-				static ubyte[] buffer = new ubyte[4096];
-				while(true) {
-					auto len = this.conn.recv(buffer);
-					if(len > 0) this.buffer.write(buffer[0..len]);
-					if(len < buffer.length) break;
-				}
-				this.onRead();
-				break;
-			case CLOSE:
-				this.onClose();
-				//TODO schedule for destruction
-				break;
-			default:
-				break;
-		}
+	final void handle(in ubyte[] data) {
+		this.onRead(data);
 	}
 
-	abstract void onRead();
+	abstract void onRead(in ubyte[] data);
 
 	abstract void onClose();
 
@@ -182,34 +166,34 @@ class Connection {
 class DefaultConnection : Connection {
 
 	private ServerBase server;
-	void delegate() _handle;
+	void delegate(in ubyte[]) _handle;
 
-	this(ServerBase server, AsyncTCPConnection conn) {
-		super(1024);
+	this(ServerBase server, TcpStream client) {
 		this.server = server;
-		this.conn = conn;
-		_handle = &this.handle;
+		this.client = client;
+		_handle = &this.handleRequest;
 	}
 
-	override void onRead() {
-		_handle();
+	override void onRead(in ubyte[] data) {
+		_handle(data);
 	}
 
-	void handle() {
+	void handleRequest(in ubyte[] data) {
 		Request request = new Request();
 		Response response = new Response();
 		response.headers["Server"] = this.server.name;
 		HandleResult result;
-		if(request.parse(this.buffer.data!char)) {
-			try this.server.router.handle(result, this.conn, request, response);
+		if(request.parse(cast(string)data)) {
+			debug writeln(request.method, " ", request.path);
+			try this.server.router.handle(result, this.client, request, response);
 			catch(Exception) response.status = StatusCodes.internalServerError;
 		} else {
 			response.status = StatusCodes.badRequest;
 		}
 		if(response.status.code >= 400 && response.body_.length == 0) this.server.router.handleError(request, response);
-		this.conn.send(cast(ubyte[])response.toString());
+		this.client.write(cast(ubyte[])response.toString());
 		if(result.connection is null) {
-			this.conn.kill();
+			this.client.close();
 		} else {
 			_handle = &result.connection.onRead;
 			result.connection.onStart();
@@ -226,19 +210,18 @@ class MultipartConnection : Connection {
 	private Request req;
 	void delegate() callback;
 
-	this(AsyncTCPConnection conn, size_t length, Request req, void delegate() callback) {
-		super(4096);
-		this.conn = conn;
+	this(TcpStream client, size_t length, Request req, void delegate() callback) {
+		this.client = client;
 		this.length = length;
 		this.req = req;
 		this.callback = callback;
 	}
 
-	override void onRead() {
-		this.req.body_ = this.req.body_ ~ this.buffer.data!char.idup;
+	override void onRead(in ubyte[] data) {
+		this.req.body_ = this.req.body_ ~ cast(string)data;
 		if(this.req.body_.length >= this.length) {
 			this.callback();
-			this.conn.kill();
+			this.client.close();
 		}
 	}
 
@@ -253,8 +236,10 @@ class WebSocketConnection : Connection {
 
 	void delegate() onStartImpl;
 
+	private Buffer buffer;
+
 	this() {
-		super(1024);
+		this.buffer = new Buffer(1024);
 		this.onStartImpl = {};
 	}
 
@@ -262,7 +247,8 @@ class WebSocketConnection : Connection {
 		this.onStartImpl();
 	}
 
-	override void onRead() {
+	override void onRead(in ubyte[] data_) {
+		this.buffer.data = data_;
 		try if((this.buffer.read!ubyte() & 0b1111) == 1) {
 			immutable info = this.buffer.read!ubyte();
 			immutable masked = (info & 0b10000000) != 0;
@@ -301,7 +287,7 @@ class WebSocketConnection : Connection {
 			this.buffer.write!(Endian.bigEndian, ulong)(data.length);
 		}
 		this.buffer.write(data);
-		this.conn.send(this.buffer.data!ubyte);
+		this.client.write(this.buffer.data!ubyte);
 	}
 
 	/**

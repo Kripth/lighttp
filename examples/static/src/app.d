@@ -21,7 +21,7 @@ void main(string[] args) {
 	auto server = new Server();
 	server.host(ip, port);
 	server.router.add(new StaticRouter(path));
-	server.loop();
+	server.run();
 
 }
 
