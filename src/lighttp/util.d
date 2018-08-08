@@ -119,6 +119,31 @@ enum StatusCodes : Status {
 }
 
 /**
+ * Frequently used Mime types.
+ */
+enum MimeTypes : string {
+	
+	// text
+	html = "text/html",
+	script = "text/javascript",
+	css = "text/css",
+	text = "text/plain",
+	
+	// images
+	png = "image/png",
+	jpeg = "image/jpeg",
+	gif = "image/gif",
+	ico = "image/x-icon",
+	svg = "image/svg+xml",
+	
+	// other
+	json = "application/json",
+	zip = "application/zip",
+	bin = "application/octet-stream",
+	
+}
+
+/**
  * Base class for request and response. Contains common properties.
  */
 abstract class HTTP {
@@ -147,12 +172,19 @@ abstract class HTTP {
 		this.headers = headers;
 	}
 
+	/**
+	 * Gets the body of the request/response.
+	 */
 	public @property string body_() pure nothrow @safe @nogc {
 		return _body;
 	}
-	
+
+	/// ditto
 	static if(__VERSION__ >= 2078) alias body = body_;
 
+	/**
+	 * Sets the body of the request/response.
+	 */
 	public @property string body_(T)(T data) {
 		static if(is(T : string)) {
 			return _body = cast(string)data;
@@ -301,25 +333,16 @@ class Response : HTTP {
 	public this(uint statusCode, string body_) {
 		this(statusCode, defaultHeaders, body_);
 	}
-	
+
 	/**
-	 * Creates a response for an HTTP error an automatically generates
-	 * an HTML page to display it.
+	 * Sets the response's content-type header.
 	 * Example:
 	 * ---
-	 * Response.error(404);
-	 * Response.error(StatusCodes.methodNotAllowed, ["Allow": "GET"]);
+	 * response.contentType = MimeTypes.html;
 	 * ---
 	 */
-	public static Response error(Status status, string[string] headers=defaultHeaders) {
-		immutable message = status.toString();
-		headers["Content-Type"] = "text/html";
-		return new Response(status, headers, "<!DOCTYPE html><html><head><title>" ~ message ~ "</title></head><body><center><h1>" ~ message ~ "</h1></center><hr><center>" ~ headers.get("Server", "sel-net") ~ "</center></body></html>");
-	}
-	
-	/// ditto
-	public static Response error(uint statusCode, string[string] headers=defaultHeaders) {
-		return error(Status.get(statusCode), headers);
+	public @property string contentType(string contentType) pure nothrow @safe {
+		return this.headers["Content-Type"] = contentType;
 	}
 	
 	/**
@@ -328,9 +351,9 @@ class Response : HTTP {
 	 * If not specified status code `301 Moved Permanently` will be used.
 	 * Example:
 	 * ---
-	 * Response.redirect("/index.html");
-	 * Response.redirect(302, "/view.php");
-	 * Response.redirect(StatusCodes.seeOther, "/icon.png", ["Server": "sel-net"]);
+	 * response.redirect("/index.html");
+	 * response.redirect(302, "/view.php");
+	 * response.redirect(StatusCodes.seeOther, "/icon.png", ["Server": "sel-net"]);
 	 * ---
 	 */
 	public void redirect(Status status, string location) {

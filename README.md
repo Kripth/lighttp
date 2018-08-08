@@ -8,6 +8,8 @@ lighttp
 Lighttp is a lightweight asynchronous HTTP and WebSocket server library for the D programming language with simple API.
 
 ```d
+import std.file;
+
 import lighttp;
 
 void main(string[] args) {
@@ -23,8 +25,19 @@ void main(string[] args) {
 
 class Router {
 
+	// GET /
 	@Get("") getIndex(Response response) {
 		response.body = "Welcome to lighttp!";
+	}
+	
+	// GET /image/uhDUnsj => imageId = "uhDUnsj"
+	@Get("image", "([a-zA-Z0-9]{7})") getImage(Response response, string imageId) {
+		if(exists("images/" ~ imageId)) {
+			response.contentType = MimeTypes.jpeg;
+			response.body = read("images/" ~ imageId);
+		} else {
+			response.status = StatusCodes.notFound;
+		}
 	}
 
 }
