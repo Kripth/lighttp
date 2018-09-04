@@ -325,6 +325,10 @@ auto Get(R...)(R path){ return routeInfo!R("GET", path); }
 
 auto Post(R...)(R path){ return routeInfo!R("POST", path); }
 
+auto Put(R...)(R path){ return routeInfo!R("PUT", path); }
+
+auto Delete(R...)(R path){ return routeInfo!R("DELETE", path); }
+
 enum Multipart;
 
 void registerRoutes(R)(Router register, R router) {
