@@ -1,10 +1,8 @@
 ﻿module lighttp.server;
 
-import std.socket : Address, parseAddress;
 import std.system : Endian;
 
-import kiss.event : EventLoop;
-import kiss.net : TcpListener, TcpStream;
+import libasync;
 
 import xbuffer;
 import xbuffer.memory : xalloc, xfree;
@@ -12,29 +10,27 @@ import xbuffer.memory : xalloc, xfree;
 import lighttp.router;
 import lighttp.util;
 
-private enum defaultName = "lighttp/0.2";
-
-import std.stdio : writeln;
+private enum defaultName = "lighttp/0.4";
 
 /**
  * Base class for servers.
  */
 abstract class ServerBase {
-
+	
 	private string _name;
 	private EventLoop _eventLoop;
 	private Router _router;
-
+	
 	this(EventLoop eventLoop, string name=defaultName) {
 		_name = name;
 		_eventLoop = eventLoop;
 		_router = new Router();
 	}
-
+	
 	this(string name=defaultName) {
-		this(new EventLoop(), name);
+		this(getThreadEventLoop(), name);
 	}
-
+	
 	/**
 	 * Gets/sets the server's name. It it the value displayed in
 	 * the "Server" HTTP header value and in the footer of default
@@ -43,11 +39,11 @@ abstract class ServerBase {
 	@property string name() pure nothrow @safe @nogc {
 		return _name;
 	}
-
+	
 	@property string name(string name) pure nothrow @safe @nogc {
 		return _name = name;
 	}
-
+	
 	/**
 	 * Gets the server's event loop. It should be used to
 	 * run the server.
@@ -55,13 +51,13 @@ abstract class ServerBase {
 	 * ---
 	 * auto server = new Server();
 	 * server.host("0.0.0.0");
-	 * server.eventLoop.run();
+	 * while(true) server.eventLoop.loop();
 	 * ---
 	 */
 	@property EventLoop eventLoop() pure nothrow @safe @nogc {
 		return _eventLoop;
 	}
-
+	
 	/**
 	 * Gets the server's router.
 	 */
@@ -73,7 +69,7 @@ abstract class ServerBase {
 	 * Gets the server's default port.
 	 */
 	abstract @property ushort defaultPort() pure nothrow @safe @nogc;
-
+	
 	/**
 	 * Binds the server to the given address.
 	 * Example:
@@ -82,58 +78,51 @@ abstract class ServerBase {
 	 * server.host("::1", 8080);
 	 * ---
 	 */
-	public void host(Address address) {
-		TcpListener listener = new TcpListener(this.eventLoop, address.addressFamily);
-		listener.onConnectionAccepted(&this.handler);
-		listener.bind(address);
-		listener.listen(1024);
-		listener.start();
-	}
-
-	/// ditto
 	void host(string ip, ushort port) {
-		this.host(parseAddress(ip, port));
+		auto listener = new AsyncTCPListener(this.eventLoop);
+		listener.host(ip, port);
+		listener.run(&this.handler);
 	}
-
+	
 	/// ditto
 	void host(string ip) {
 		return this.host(ip, this.defaultPort);
 	}
-
+	
 	/**
-	 * Runs the event loop.
+	 * Calls eventLoop.loop until the given condition
+	 * is true.
 	 */
-	public void run() {
-		this.eventLoop.run();
+	void run(bool delegate() condition) {
+		while(condition()) this.eventLoop.loop();
 	}
-
+	
 	/**
-	 * Stops the event loop.
+	 * Calls eventLoop.loop in an infinite loop.
 	 */
-	public void stop() {
-		this.eventLoop.stop();
+	void run() {
+		while(true) this.eventLoop.loop();
 	}
-
-	protected abstract void handler(TcpListener sender, TcpStream client);
-
+	
+	abstract void delegate(TCPEvent) handler(AsyncTCPConnection conn);
+	
 }
 
 class ServerImpl(T:Connection, ushort _port) : ServerBase {
-
+	
 	this(E...)(E args) { //TODO remove when default constructors are implemented
 		super(args);
 	}
-
+	
 	override @property ushort defaultPort() {
 		return _port;
 	}
-
-	override void handler(TcpListener sender, TcpStream client) {
-		Connection ret = new T(this, client);
-		client.onDataReceived(&ret.handle);
-		client.onClosed(&ret.onClose);
+	
+	override void delegate(TCPEvent) handler(AsyncTCPConnection conn) {
+		Connection ret = new T(this, conn);
+		return &ret.handle;
 	}
-
+	
 }
 
 /**
@@ -148,107 +137,133 @@ class ServerImpl(T:Connection, ushort _port) : ServerBase {
 alias Server = ServerImpl!(DefaultConnection, 80);
 
 class Connection {
-
-	TcpStream client;
-
-	void onStart() {}
-
-	final void handle(in ubyte[] data) {
-		this.onRead(data);
+	
+	AsyncTCPConnection conn;
+	
+	protected Buffer buffer;
+	
+	protected this(size_t bufferSize) {
+		this.buffer = xalloc!Buffer(bufferSize);
 	}
-
-	abstract void onRead(in ubyte[] data);
-
+	
+	~this() {
+		xfree(this.buffer);
+	}
+	
+	void onStart() {}
+	
+	final void handle(TCPEvent event) {
+		switch(event) with(TCPEvent) {
+			case READ:
+				this.buffer.reset();
+				static ubyte[] buffer = new ubyte[4096];
+				while(true) {
+					auto len = this.conn.recv(buffer);
+					if(len > 0) this.buffer.write(buffer[0..len]);
+					if(len < buffer.length) break;
+				}
+				this.onRead();
+				break;
+			case CLOSE:
+				this.onClose();
+				//TODO schedule for destruction
+				break;
+			default:
+				break;
+		}
+	}
+	
+	abstract void onRead();
+	
 	abstract void onClose();
-
+	
 }
 
 class DefaultConnection : Connection {
-
+	
 	private ServerBase server;
-	void delegate(in ubyte[]) _handle;
-
-	this(ServerBase server, TcpStream client) {
+	void delegate() _handle;
+	
+	this(ServerBase server, AsyncTCPConnection conn) {
+		super(1024);
 		this.server = server;
-		this.client = client;
-		_handle = &this.handleRequest;
+		this.conn = conn;
+		_handle = &this.handle;
 	}
-
-	override void onRead(in ubyte[] data) {
-		_handle(data);
+	
+	override void onRead() {
+		_handle();
 	}
-
-	void handleRequest(in ubyte[] data) {
-		Request request = new Request();
-		Response response = new Response();
+	
+	void handle() {
+		ServerRequest request = new ServerRequest();
+		ServerResponse response = new ServerResponse();
+		request.address = this.conn.local;
 		response.headers["Server"] = this.server.name;
 		HandleResult result;
-		if(request.parse(cast(string)data)) {
-			debug writeln(request.method, " ", request.path);
-			try this.server.router.handle(result, this.client, request, response);
+		if(request.parse(this.buffer.data!char)) {
+			try this.server.router.handle(result, this.conn, request, response);
 			catch(Exception) response.status = StatusCodes.internalServerError;
 		} else {
 			response.status = StatusCodes.badRequest;
 		}
 		if(response.status.code >= 400 && response.body_.length == 0) this.server.router.handleError(request, response);
-		this.client.write(cast(ubyte[])response.toString());
+		this.conn.send(cast(ubyte[])response.toString());
 		if(result.connection is null) {
-			this.client.close();
+			this.conn.kill();
 		} else {
 			_handle = &result.connection.onRead;
 			result.connection.onStart();
 		}
 	}
-
+	
 	override void onClose() {}
-
+	
 }
 
 class MultipartConnection : Connection {
-
+	
 	private size_t length;
-	private Request req;
+	private Http req;
 	void delegate() callback;
-
-	this(TcpStream client, size_t length, Request req, void delegate() callback) {
-		this.client = client;
+	
+	this(AsyncTCPConnection conn, size_t length, Http req, void delegate() callback) {
+		super(4096);
+		this.conn = conn;
 		this.length = length;
 		this.req = req;
 		this.callback = callback;
 	}
-
-	override void onRead(in ubyte[] data) {
-		this.req.body_ = this.req.body_ ~ cast(string)data;
+	
+	override void onRead() {
+		this.req.body_ = this.req.body_ ~ this.buffer.data!char.idup;
 		if(this.req.body_.length >= this.length) {
 			this.callback();
-			this.client.close();
+			this.conn.kill();
 		}
 	}
-
+	
 	override void onClose() {}
-
+	
 }
 
 /**
  * Base class for web socket clients.
  */
 class WebSocketConnection : Connection {
-
+	
 	void delegate() onStartImpl;
-
-	private Buffer buffer;
-
+	
 	this() {
-		this.buffer = new Buffer(1024);
+		super(1024);
 		this.onStartImpl = {};
 	}
-
+	
 	override void onStart() {
 		this.onStartImpl();
 	}
-
-	override void onRead(in ubyte[] data_) {
-		this.buffer.data = data_;
+	
+	override void onRead() {
 		try if((this.buffer.read!ubyte() & 0b1111) == 1) {
 			immutable info = this.buffer.read!ubyte();
 			immutable masked = (info & 0b10000000) != 0;
@@ -287,17 +302,17 @@ class WebSocketConnection : Connection {
 			this.buffer.write!(Endian.bigEndian, ulong)(data.length);
 		}
 		this.buffer.write(data);
-		this.client.write(this.buffer.data!ubyte);
+		this.conn.send(this.buffer.data!ubyte);
 	}
-
+	
 	/**
 	 * Notifies that the client has sent some data.
 	 */
 	abstract void onReceive(ubyte[] data);
-
+	
 	/**
 	 * Notifies that the connection has been interrupted.
 	 */
 	override abstract void onClose();
-
+	
 }

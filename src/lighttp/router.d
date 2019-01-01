@@ -9,7 +9,7 @@ import std.socket : Address;
 import std.string : startsWith, join;
 import std.traits : Parameters, hasUDA;
 
-import kiss.net : TcpStream;
+import libasync : AsyncTCPConnection;
 
 import lighttp.resource;
 import lighttp.server : Connection, MultipartConnection, WebSocketConnection;
@@ -37,7 +37,7 @@ class Router {
 
 	private Route[][string] routes;
 
-	private void delegate(Request, Response) _errorHandler;
+	private void delegate(ServerRequest, ServerResponse) _errorHandler;
 
 	this() {
 		this.add("GET", "", indexPage);
@@ -47,8 +47,8 @@ class Router {
 	/*
 	 * Handles a connection.
 	 */
-	void handle(ref HandleResult result, TcpStream client, Request req, Response res) {
-		if(!req.path.startsWith("/")) {
+	void handle(ref HandleResult result, AsyncTCPConnection client, ServerRequest req, ServerResponse res) {
+		if(!req.url.path.startsWith("/")) {
 			res.status = StatusCodes.badRequest;
 		} else {
 			auto routes = req.method in this.routes;
@@ -66,11 +66,11 @@ class Router {
 	 * Handles a client or server error and displays an error
 	 * page to the client.
 	 */
-	void handleError(Request req, Response res) {
+	void handleError(ServerRequest req, ServerResponse res) {
 		_errorHandler(req, res);
 	}
 
-	private void defaultErrorHandler(Request req, Response res) {
+	private void defaultErrorHandler(ServerRequest req, ServerResponse res) {
 		errorPage.apply(["message": res.status.message, "error": res.status.toString(), "server": res.headers.get("Server", "lighttp")]).apply(req, res);
 	}
 
@@ -110,7 +110,7 @@ class Router {
 	}
 
 	void add(T)(RouteInfo!T info, Resource resource) {
-		this.add(info, (Request req, Response res){ resource.apply(req, res); });
+		this.add(info, (ServerRequest req, ServerResponse res){ resource.apply(req, res); });
 	}
 
 	void add(T, E...)(string method, T path, void delegate(E) del) {
@@ -142,7 +142,7 @@ class Router {
 
 class Route {
 
-	abstract void handle(ref HandleResult result, TcpStream client, Request req, Response res);
+	abstract void handle(ref HandleResult result, AsyncTCPConnection client, ServerRequest req, ServerResponse res);
 
 }
 
@@ -151,35 +151,23 @@ class RouteImpl(T, E...) if(is(T == string) || isRegexFor!(T, string)) : Route {
 	private T path;
 	
 	static if(E.length) {
-		static if(is(E[0] == Address)) {
-			enum __address = 0;
-			static if(E.length > 1) {
-				static if(is(E[1] == Request)) {
-					enum __request = 1;
-					static if(E.length > 2 && is(E[2] == Response)) {
-						enum __response = 2;
-					}
-				} else static if(is(E[1] == Response)) {
-					enum __response = 1;
-				}
-			}
-		} else static if(is(E[0] == Request)) {
+		static if(is(E[0] == ServerRequest)) {
 			enum __request = 0;
-			static if(E.length > 1 && is(E[1] == Response)) enum __response = 1;
-		} else static if(is(E[0] == Response)) {
+			static if(E.length > 1 && is(E[1] == ServerResponse)) enum __response = 1;
+		} else static if(is(E[0] == ServerResponse)) {
 			enum __response = 0;
+			static if(E.length > 1 && is(E[1] == ServerRequest)) enum __request = 1;
 		}
 	}
-	
-	static if(!is(typeof(__address))) enum __address = -1;
+
 	static if(!is(typeof(__request))) enum __request = -1;
 	static if(!is(typeof(__response))) enum __response = -1;
 	
-	static if(__address == -1 && __request == -1 && __response == -1) {
+	static if(__request == -1 && __response == -1) {
 		alias Args = E[0..0];
 		alias Match = E[0..$];
 	} else {
-		enum _ = max(__address, __request, __response) + 1;
+		enum _ = max(__request, __response) + 1;
 		alias Args = E[0.._];
 		alias Match = E[_..$];
 	}
@@ -190,24 +178,23 @@ class RouteImpl(T, E...) if(is(T == string) || isRegexFor!(T, string)) : Route {
 		this.path = path;
 	}
 	
-	void callImpl(void delegate(E) del, TcpStream client, Request req, Response res, Match match) {
+	void callImpl(void delegate(E) del, AsyncTCPConnection client, ServerRequest req, ServerResponse res, Match match) {
 		Args args;
-		static if(__address != -1) args[__address] = client.remoteAddress;
 		static if(__request != -1) args[__request] = req;
 		static if(__response != -1) args[__response] = res;
 		del(args, match);
 	}
 	
-	abstract void call(ref HandleResult result, TcpStream client, Request req, Response res, Match match);
+	abstract void call(ref HandleResult result, AsyncTCPConnection client, ServerRequest req, ServerResponse res, Match match);
 	
-	override void handle(ref HandleResult result, TcpStream client, Request req, Response res) {
+	override void handle(ref HandleResult result, AsyncTCPConnection client, ServerRequest req, ServerResponse res) {
 		static if(is(T == string)) {
-			if(req.path[1..$] == this.path) {
+			if(req.url.path[1..$] == this.path) {
 				this.call(result, client, req, res);
 				result.success = true;
 			}
 		} else {
-			auto match = req.path[1..$].matchAll(this.path);
+			auto match = req.url.path[1..$].matchAll(this.path);
 			if(match && match.post.length == 0) {
 				string[] matches;
 				foreach(m ; match.front) matches ~= m;
@@ -237,7 +224,7 @@ class RouteOf(T, E...) : RouteImpl!(T, E) {
 		this.del = del;
 	}
 	
-	override void call(ref HandleResult result, TcpStream client, Request req, Response res, Match match) {
+	override void call(ref HandleResult result, AsyncTCPConnection client, ServerRequest req, ServerResponse res, Match match) {
 		this.callImpl(this.del, client, req, res, match);
 	}
 	
@@ -249,7 +236,7 @@ class MultipartRouteOf(T, E...) : RouteOf!(T, E) {
 		super(path, del);
 	}
 
-	override void call(ref HandleResult result, TcpStream client, Request req, Response res, Match match) {
+	override void call(ref HandleResult result, AsyncTCPConnection client, ServerRequest req, ServerResponse res, Match match) {
 		auto lstr = "content-length" in req.headers;
 		if(lstr) {
 			try {
@@ -278,7 +265,7 @@ class WebSocketRouteOf(WebSocket, T, E...) : RouteImpl!(T, E) {
 		this.createWebSocket = createWebSocket;
 	}
 
-	override void call(ref HandleResult result, TcpStream client, Request req, Response res, Match match) {
+	override void call(ref HandleResult result, AsyncTCPConnection client, ServerRequest req, ServerResponse res, Match match) {
 		auto key = "sec-websocket-key" in req.headers;
 		if(key) {
 			res.status = StatusCodes.switchingProtocols;
@@ -287,7 +274,7 @@ class WebSocketRouteOf(WebSocket, T, E...) : RouteImpl!(T, E) {
 			res.headers["Upgrade"] = "websocket";
 			// create web socket and set callback for onConnect
 			WebSocket webSocket = this.createWebSocket();
-			webSocket.client = client;
+			webSocket.conn = client;
 			result.connection = webSocket;
 			static if(__traits(hasMember, WebSocket, "onConnect")) webSocket.onStartImpl = { this.callImpl(&webSocket.onConnect, client, req, res, match); };
 		} else {

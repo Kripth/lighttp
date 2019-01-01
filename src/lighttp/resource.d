@@ -6,7 +6,7 @@ import std.digest.crc : crc32Of;
 import std.string : indexOf, strip;
 import std.zlib : HeaderFormat, Compress;
 
-import lighttp.util;
+import lighttp.util : StatusCodes, Http;
 
 class Resource {
 	
@@ -41,14 +41,14 @@ class Resource {
 		this.compressed = data;
 	}
 	
-	public void apply(Request req, Response res) {
+	public void apply(Http req, Http res) {
 		if(this.compressed !is null && req.headers.get("accept-encoding", "").indexOf("gzip") != -1) {
 			res.headers["Content-Encoding"] = "gzip";
 			res.body_ = cast(string)this.compressed;
 		} else {
 			res.body_ = cast(string)this.uncompressed;
 		}
-		res.headers["Content-Type"] = this.mime;
+		res.contentType = this.mime;
 	}
 	
 }
@@ -70,7 +70,7 @@ class CachedResource : Resource {
 		return super.data(data);
 	}
 	
-	public override void apply(Request req, Response res) {
+	public override void apply(Http req, Http res) {
 		if(req.headers.get("if-none-match", "") == this.etag) {
 			res.status = StatusCodes.notModified;
 		} else {

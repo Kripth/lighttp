@@ -8,6 +8,10 @@ import std.string : toUpper, toLower, split, join, strip, indexOf;
 import std.traits : EnumMembers;
 import std.uri : encode, decode;
 
+import libasync : NetworkAddress;
+
+import url : URL;
+
 /**
  * Indicates the status of an HTTP response.
  */
@@ -143,45 +147,41 @@ enum MimeTypes : string {
 	
 }
 
-/**
- * Base class for request and response. Contains common properties.
- */
-abstract class HTTP {
+private enum User {
 
-	enum VERSION = "HTTP/1.1";
-	
-	enum GET = "GET";
-	enum POST = "POST";
+	client,
+	server
 
-	/**
-	 * Method used.
-	 */
-	public string method;
+}
 
-	/**
-	 * Headers of the request/response.
-	 */
+private enum Type {
+
+	request,
+	response
+
+}
+
+abstract class Http {
+
+	protected string _method;
+
+	public Status status;
+
 	public string[string] headers;
-	
+
 	protected string _body;
 
-	public this() {}
-
-	public this(string method, string[string] headers) {
-		this.method = method;
-		this.headers = headers;
+	public @property string method() pure nothrow @safe @nogc {
+		return _method;
 	}
-
+	
 	/**
 	 * Gets the body of the request/response.
 	 */
 	public @property string body_() pure nothrow @safe @nogc {
 		return _body;
 	}
-
-	/// ditto
-	static if(__VERSION__ >= 2078) alias body = body_;
-
+	
 	/**
 	 * Sets the body of the request/response.
 	 */
@@ -189,7 +189,7 @@ abstract class HTTP {
 		static if(is(T : string)) {
 			return _body = cast(string)data;
 		} else static if(is(T == JSONValue)) {
-			this.headers["Content-Type"] = "application/json; charset=utf-8";
+			this.contentType = "application/json; charset=utf-8";
 			return _body = data.toString();
 		} else static if(is(T == JSONValue[string]) || is(T == JSONValue[])) {
 			return body_ = JSONValue(data);
@@ -197,143 +197,10 @@ abstract class HTTP {
 			return _body = data.to!string;
 		}
 	}
-
-}
-
-enum defaultHeaders = (string[string]).init;
-
-/**
- * Container for a HTTP request.
- * Example:
- * ---
- * new Request("GET", "/");
- * new Request(Request.POST, "/subscribe.php");
- * ---
- */
-class Request : HTTP {
-
-	private string _path;
-
-	/**
-	 * Query of the request. The part or the path after the
-	 * question mark.
-	 */
-	public string[string] query;
-
-	public this() {
-		super();
-	}
 	
-	public this(string method, string path, string[string] headers=defaultHeaders) {
-		super(method, headers);
-		this.path = path;
-	}
-
-	/**
-	 * Gets the path of the request.
-	 */
-	public @property string path() pure nothrow @safe @nogc {
-		return _path;
-	}
-
-	private @property string path(string path) {
-		immutable qm = path.indexOf("?");
-		if(qm == -1) {
-			_path = path;
-		} else {
-			_path = path[0..qm];
-			foreach(query ; path[qm+1..$].split("&")) {
-				immutable eq = query.indexOf("=");
-				if(eq > 0) this.query[query[0..eq]] = query[eq+1..$];
-			}
-		}
-		return _path;
-	}
+	/// ditto
+	static if(__VERSION__ >= 2078) alias body = body_;
 	
-	/**
-	 * Encodes the request into a string.
-	 * The `Content-Length` header property is always added automatically.
-	 * Example:
-	 * ---
-	 * auto request = new Request(Request.GET, "index.html");
-	 * assert(request.toString() == "GET /index.html HTTP/1.1\r\nContent-Length: 0\r\n");
-	 * ---
-	 */
-	public override string toString() {
-		if(this.body_.length) this.headers["Content-Length"] = to!string(this.body_.length);
-		return encodeHTTP(this.method.toUpper() ~ " " ~ encode(this.path) ~ " HTTP/1.1", this.headers, this.body_);
-	}
-	
-	/**
-	 * Parses a string and returns whether the request was valid.
-	 * Please note that every key in the header is converted to lowercase for
-	 * an easier search in the associative array.
-	 * Example:
-	 * ---
-	 * Request request = new Request();
-	 * assert(request.parse("GET /index.html HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: Keep-Alive\r\n"));
-	 * assert(request.method == Request.GET);
-	 * assert(request.headers["Host"] == "127.0.0.1");
-	 * assert(request.headers["Connection"] == "Keep-Alive");
-	 * ---
-	 */
-	public bool parse(string data) {
-		string status;
-		if(decodeHTTP(data, status, this.headers, this._body)) {
-			string[] spl = status.split(" ");
-			if(spl.length == 3) {
-				this.method = spl[0];
-				this.path = decode(spl[1]);
-				return true;
-			}
-		}
-		return false;
-	}
-	
-}
-
-/**
- * Container for an HTTP response.
- * Example:
- * ---
- * new Response(200, ["Connection": "Close"], "<b>Hi there</b>");
- * new Response(404, [], "Cannot find the specified path");
- * new Response(204);
- * ---
- */
-class Response : HTTP {
-	
-	/**
-	 * Status of the response.
-	 */
-	Status status;
-	
-	/**
-	 * If the response was parsed, indicates whether it was in a
-	 * valid HTTP format.
-	 */
-	bool valid;
-
-	public this() {}
-	
-	public this(Status status, string[string] headers=defaultHeaders, string body_="") {
-		this.status = status;
-		this.headers = headers;
-		this.body_ = body_;
-	}
-	
-	public this(uint statusCode, string[string] headers=defaultHeaders, string body_="") {
-		this(Status.get(statusCode), headers, body_);
-	}
-	
-	public this(Status status, string body_) {
-		this(status, defaultHeaders, body_);
-	}
-	
-	public this(uint statusCode, string body_) {
-		this(statusCode, defaultHeaders, body_);
-	}
-
 	/**
 	 * Sets the response's content-type header.
 	 * Example:
@@ -344,98 +211,122 @@ class Response : HTTP {
 	public @property string contentType(string contentType) pure nothrow @safe {
 		return this.headers["Content-Type"] = contentType;
 	}
-	
-	/**
-	 * Creates a 3xx redirect response and adds the `Location` field to
-	 * the header.
-	 * If not specified status code `301 Moved Permanently` will be used.
-	 * Example:
-	 * ---
-	 * response.redirect("/index.html");
-	 * response.redirect(302, "/view.php");
-	 * response.redirect(StatusCodes.seeOther, "/icon.png", ["Server": "sel-net"]);
-	 * ---
-	 */
-	public void redirect(Status status, string location) {
-		this.status = status;
-		this.headers["Location"] = location;
-	}
-	
-	/// ditto
-	public void redirect(uint statusCode, string location) {
-		this.redirect(Status.get(statusCode), location);
-	}
-	
-	/// ditto
-	public void redirect(string location) {
-		this.redirect(StatusCodes.movedPermanently, location);
-	}
-	
-	/**
-	 * Encodes the response into a string.
-	 * The `Content-Length` header field is created automatically
-	 * based on the length of the content field.
-	 * Example:
-	 * ---
-	 * auto response = new Response(200, [], "Hi");
-	 * assert(response.toString() == "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nHi");
-	 * ---
-	 */
-	public override string toString() {
-		this.headers["Content-Length"] = to!string(this.body_.length);
-		return encodeHTTP("HTTP/1.1 " ~ this.status.toString(), this.headers, this.body_);
-	}
-	
-	/**
-	 * Parses a string and returns a Response.
-	 * If the response is successfully parsed Response.valid will be true.
-	 * Please note that every key in the header is converted to lowercase for
-	 * an easier search in the associative array.
-	 * Example:
-	 * ---
-	 * auto response = new Response()
-	 * assert(response.parse("HTTP/1.1 200 OK\r\nContent-Type: plain/text\r\nContent-Length: 4\r\n\r\ntest"));
-	 * assert(response.status == 200);
-	 * assert(response.headers["content-type"] == "text/plain");
-	 * assert(response.headers["content-length"] == "4");
-	 * assert(response.content == "test");
-	 * ---
-	 */
-	public bool parse(string str) {
-		string status;
-		if(decodeHTTP(str, status, this.headers, this._body)) {
-			string[] head = status.split(" ");
-			if(head.length >= 3) {
-				try {
-					this.status = Status(to!uint(head[1]), join(head[2..$], " "));
-					return true;
-				} catch(ConvException) {}
-			}
-		}
-		return false;
-	}
-	
+
+	public abstract bool parse(string);
+
 }
 
-private enum CR_LF = "\r\n";
+/**
+ * Class for request and response.
+ */
+template HttpImpl(User user, Type type) {
+
+	class HttpImpl : Http {
+
+		static if(user == User.client && type == Type.response || user == User.server && type == Type.request) public NetworkAddress address;
+
+		static if(type == Type.request) private URL _url;
+
+		static if(type == Type.request) public @property URL url() pure nothrow @safe @nogc {
+			return _url;
+		}
+
+		static if(user == User.server && type == Type.response) {
+		
+			/**
+			 * Creates a 3xx redirect response and adds the `Location` field to
+			 * the header.
+			 * If not specified status code `301 Moved Permanently` will be used.
+			 * Example:
+			 * ---
+			 * http.redirect("/index.html");
+			 * http.redirect(302, "/view.php");
+			 * http.redirect(StatusCodes.seeOther, "/icon.png");
+			 * ---
+			 */
+			public void redirect(Status status, string location) {
+				this.status = status;
+				this.headers["Location"] = location;
+			}
+			
+			/// ditto
+			public void redirect(uint statusCode, string location) {
+				this.redirect(Status.get(statusCode), location);
+			}
+			
+			/// ditto
+			public void redirect(string location) {
+				this.redirect(StatusCodes.movedPermanently, location);
+			}
+
+		}
+
+		public override string toString() {
+			static if(type == Type.request) {
+				if(this.body_.length) this.headers["Content-Length"] = to!string(this.body_.length);
+				return encodeHTTP(this.method.toUpper() ~ " " ~ encode(this.url.path ~ this.url.queryParams.toString()) ~ " HTTP/1.1", this.headers, this.body_);
+			} else {
+				this.headers["Content-Length"] = to!string(this.body_.length);
+				return encodeHTTP("HTTP/1.1 " ~ this.status.toString(), this.headers, this.body_);
+			}
+		}
+
+		public override bool parse(string data) {
+			string status;
+			static if(type == Type.request) {
+				if(decodeHTTP(data, status, this.headers, this._body)) {
+					string[] spl = status.split(" ");
+					if(spl.length == 3) {
+						_method = spl[0];
+						_url.path = decode(spl[1]);
+						return true;
+					}
+				}
+			} else {
+				if(decodeHTTP(data, status, this.headers, this._body)) {
+					string[] head = status.split(" ");
+					if(head.length >= 3) {
+						try {
+							this.status = Status(to!uint(head[1]), join(head[2..$], " "));
+							return true;
+						} catch(ConvException) {}
+					}
+				}
+			}
+			return false;
+		}
+
+	}
+
+}
+
+alias ClientRequest = HttpImpl!(User.client, Type.request);
+
+alias ClientResponse = HttpImpl!(User.client, Type.response);
+
+alias ServerRequest = HttpImpl!(User.server, Type.request);
+
+alias ServerResponse = HttpImpl!(User.server, Type.response);
+
+private enum crlf = "\r\n";
 
 private string encodeHTTP(string status, string[string] headers, string content) {
 	Appender!string ret;
 	ret.put(status);
-	ret.put(CR_LF);
+	ret.put(crlf);
 	foreach(key, value; headers) {
 		ret.put(key);
 		ret.put(": ");
 		ret.put(value);
-		ret.put(CR_LF);
+		ret.put(crlf);
 	}
-	ret.put(CR_LF); // empty line
+	ret.put(crlf); // empty line
 	ret.put(content);
 	return ret.data;
 }
 
 private bool decodeHTTP(string str, ref string status, ref string[string] headers, ref string content) {
-	string[] spl = str.split(CR_LF);
+	string[] spl = str.split(crlf);
 	if(spl.length > 1) {
 		status = spl[0];
 		size_t index;
@@ -447,7 +338,7 @@ private bool decodeHTTP(string str, ref string status, ref string[string] header
 				return false; // invalid header
 			}
 		}
-		content = join(spl[index+1..$], "\r\n");
+		content = join(spl[index+1..$], crlf);
 		return true;
 	} else {
 		return false;
