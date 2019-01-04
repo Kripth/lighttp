@@ -11,6 +11,9 @@ import xbuffer.memory : xalloc, xfree;
 import lighttp.router;
 import lighttp.util;
 
+/**
+ * Options to define how the server behaves.
+ */
 struct ServerOptions {
 
 	/**
@@ -153,6 +156,8 @@ class ServerImpl(T:Connection, ushort _port) : ServerBase {
  */
 alias Server = ServerImpl!(DefaultConnection, 80);
 
+private ubyte[] __buffer = new ubyte[2 ^^ 24]; // 16 mb
+
 class Connection {
 	
 	AsyncTCPConnection conn;
@@ -167,11 +172,10 @@ class Connection {
 		switch(event) with(TCPEvent) {
 			case READ:
 				this.buffer.reset();
-				static ubyte[] buffer = new ubyte[4096];
 				while(true) {
-					auto len = this.conn.recv(buffer);
-					if(len > 0) this.buffer.write(buffer[0..len]);
-					if(len < buffer.length) break;
+					auto len = this.conn.recv(__buffer);
+					if(len > 0) this.buffer.write(__buffer[0..len]);
+					if(len < __buffer.length) break;
 				}
 				this.onRead();
 				break;
@@ -267,6 +271,8 @@ class MultipartConnection : Connection {
 	
 	override void onRead() {
 		this.req.body_ = this.req.body_ ~ this.buffer.data!char.idup;
+		import std.stdio;
+		writeln("Body is not ", this.req.body_.length);
 		if(this.req.body_.length >= this.length) {
 			this.callback();
 			this.conn.send(cast(ubyte[])res.toString());

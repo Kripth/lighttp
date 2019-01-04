@@ -7,7 +7,7 @@ import std.json : JSONValue;
 import std.regex : ctRegex;
 import std.string : toUpper, toLower, split, join, strip, indexOf;
 import std.traits : EnumMembers;
-import std.uri : encode, decode;
+import std.uri : encode, decodeComponent;
 
 import libasync : NetworkAddress;
 
@@ -472,7 +472,20 @@ template HttpImpl(User user, Type type) {
 					string[] spl = status.split(" ");
 					if(spl.length == 3) {
 						_method = spl[0];
-						_url.path = decode(spl[1]);
+						immutable q = spl[1].indexOf("?");
+						if(q >= 0) {
+							_url.path = decodeComponent(spl[1][0..q]);
+							foreach(param ; spl[1][q+1..$].split("&")) {
+								immutable eq = param.indexOf("=");
+								if(eq >= 0) {
+									_url.queryParams.add(decodeComponent(param[0..eq]), decodeComponent(param[eq+1..$]));
+								} else {
+									_url.queryParams.add(decodeComponent(param), "");
+								}
+							}
+						} else {
+							_url.path = decodeComponent(spl[1]);
+						}
 						return true;
 					}
 				}
