@@ -231,7 +231,7 @@ abstract class Http {
 		 * ---
 		 */
 		string* opBinaryRight(string op : "in")(string key) pure @safe {
-			if(auto ptr = key.toLower in _headersIndexes) return &_headers[*ptr].key;
+			if(auto ptr = key.toLower in _headersIndexes) return &_headers[*ptr].value;
 			else return null;
 		}
 
@@ -414,6 +414,8 @@ template HttpImpl(User user, Type type) {
 
 		static if(type == Type.request) private URL _url;
 
+		static if(user == User.server && type == Type.response) public bool ready = true;
+
 		/**
 		 * Gets the url of the request. `url.path` can be used to
 		 * retrive the path and `url.queryParams` to retrive the query
@@ -525,7 +527,7 @@ private bool decodeHTTP(string str, ref string status, ref Http.Headers headers,
 		while(++index < spl.length && spl[index].length) { // read until empty line
 			auto s = spl[index].split(":");
 			if(s.length >= 2) {
-				headers[s[0].strip] = s[1..$].join(":").strip;
+				headers.add(s[0].strip, s[1..$].join(":").strip);
 			} else {
 				return false; // invalid header
 			}

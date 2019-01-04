@@ -1,5 +1,6 @@
 ﻿module lighttp.server;
 
+import std.string : toLower;
 import std.system : Endian;
 
 import libasync;
@@ -10,38 +11,54 @@ import xbuffer.memory : xalloc, xfree;
 import lighttp.router;
 import lighttp.util;
 
-private enum defaultName = "lighttp/0.5";
+struct ServerOptions {
+
+	/**
+	 * Name of the server set as value in the `Server` header field
+	 * and displayed in lighttp's default error messages.
+	 */
+	string name = "lighttp/0.5";
+
+	/**
+	 * Indicates whether the handler should catch exceptions.
+	 * If set to true the server will return a `500 Internal Server Error`
+	 * upon catching an exception.
+	 */
+	bool handleExceptions = true;
+
+	/**
+	 * Indicates the maximum size for a payload. If the header
+	 * `Content-Length` sent by the client exceeds the indicated
+	 * length the server will return a `413 Payload too Large`.
+	 */
+	size_t max = size_t.max;
+
+}
 
 /**
  * Base class for servers.
  */
 abstract class ServerBase {
 	
-	private string _name;
+	private ServerOptions _options;
 	private EventLoop _eventLoop;
 	private Router _router;
 	
-	this(EventLoop eventLoop, string name=defaultName) {
-		_name = name;
+	this(EventLoop eventLoop, ServerOptions options=ServerOptions.init) {
+		_options = options;
 		_eventLoop = eventLoop;
 		_router = new Router();
 	}
 	
-	this(string name=defaultName) {
-		this(getThreadEventLoop(), name);
+	this(ServerOptions options=ServerOptions.init) {
+		this(getThreadEventLoop(), options);
 	}
-	
+
 	/**
-	 * Gets/sets the server's name. It it the value displayed in
-	 * the "Server" HTTP header value and in the footer of default
-	 * error message pages.
+	 * Gets the server's options.
 	 */
-	@property string name() pure nothrow @safe @nogc {
-		return _name;
-	}
-	
-	@property string name(string name) pure nothrow @safe @nogc {
-		return _name = name;
+	@property ServerOptions options() pure nothrow @safe @nogc {
+		return _options;
 	}
 	
 	/**
@@ -142,15 +159,9 @@ class Connection {
 	
 	protected Buffer buffer;
 	
-	protected this(size_t bufferSize) {
-		this.buffer = xalloc!Buffer(bufferSize);
-	}
-	
-	~this() {
-		xfree(this.buffer);
-	}
-	
 	void onStart() {}
+
+	protected bool log=false;
 	
 	final void handle(TCPEvent event) {
 		switch(event) with(TCPEvent) {
@@ -181,17 +192,30 @@ class Connection {
 class DefaultConnection : Connection {
 	
 	private ServerBase server;
-	void delegate() _handle;
+
+	private void delegate() _handle;
+	private void delegate(ref HandleResult, AsyncTCPConnection, ServerRequest, ServerResponse) _handleRoute;
 	
 	this(ServerBase server, AsyncTCPConnection conn) {
-		super(1024);
+		this.buffer = new Buffer(4096);
 		this.server = server;
 		this.conn = conn;
 		_handle = &this.handle;
+		if(this.server.options.handleExceptions) _handleRoute = &this.handleRouteCatch;
+		else _handleRoute = &this.handleRouteNoCatch;
 	}
 	
 	override void onRead() {
 		_handle();
+	}
+
+	private void handleRouteCatch(ref HandleResult result, AsyncTCPConnection client, ServerRequest req, ServerResponse res) {
+		try this.server.router.handle(this.server.options, result, client, req, res);
+		catch(Exception) res.status = StatusCodes.internalServerError;
+	}
+
+	private void handleRouteNoCatch(ref HandleResult result, AsyncTCPConnection client, ServerRequest req, ServerResponse res) {
+		this.server.router.handle(this.server.options, result, client, req, res);
 	}
 
 	void handle() {
@@ -202,20 +226,21 @@ class DefaultConnection : Connection {
 		ServerRequest request = new ServerRequest();
 		ServerResponse response = new ServerResponse();
 		request.address = this.conn.local;
-		response.headers["Server"] = this.server.name;
+		response.headers["Server"] = this.server.options.name;
 		HandleResult result;
 		if(request.parse(data)) {
+			//TODO max request size
 			if(auto connection = "connection" in request.headers) response.headers["Connection"] = *connection;
-			try this.server.router.handle(result, this.conn, request, response);
-			catch(Exception) response.status = StatusCodes.internalServerError;
+			_handleRoute(result, this.conn, request, response);
 		} else {
 			response.status = StatusCodes.badRequest;
 		}
 		if(response.status.code >= 400 && response.body_.length == 0) this.server.router.handleError(request, response);
-		this.conn.send(cast(ubyte[])response.toString());
+		if(response.ready) this.conn.send(cast(ubyte[])response.toString());
 		auto connection = "connection" in response.headers;
 		if(result.connection !is null) {
 			_handle = &result.connection.onRead;
+			result.connection.buffer = this.buffer;
 			result.connection.onStart();
 		} else if(connection is null || toLower(*connection) != "keep-alive") {
 			this.conn.kill();
@@ -229,14 +254,14 @@ class DefaultConnection : Connection {
 class MultipartConnection : Connection {
 	
 	private size_t length;
-	private Http req;
+	private Http req, res;
 	void delegate() callback;
 	
-	this(AsyncTCPConnection conn, size_t length, Http req, void delegate() callback) {
-		super(4096);
+	this(AsyncTCPConnection conn, size_t length, Http req, Http res, void delegate() callback) {
 		this.conn = conn;
 		this.length = length;
 		this.req = req;
+		this.res = res;
 		this.callback = callback;
 	}
 	
@@ -244,6 +269,7 @@ class MultipartConnection : Connection {
 		this.req.body_ = this.req.body_ ~ this.buffer.data!char.idup;
 		if(this.req.body_.length >= this.length) {
 			this.callback();
+			this.conn.send(cast(ubyte[])res.toString());
 			this.conn.kill();
 		}
 	}
@@ -260,7 +286,6 @@ class WebSocketConnection : Connection {
 	void delegate() onStartImpl;
 	
 	this() {
-		super(1024);
 		this.onStartImpl = {};
 	}
 	

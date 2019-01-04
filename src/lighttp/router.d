@@ -12,7 +12,7 @@ import std.traits : Parameters, hasUDA;
 import libasync : AsyncTCPConnection;
 
 import lighttp.resource;
-import lighttp.server : Connection, MultipartConnection, WebSocketConnection;
+import lighttp.server : ServerOptions, Connection, MultipartConnection, WebSocketConnection;
 import lighttp.util;
 
 struct HandleResult {
@@ -40,21 +40,21 @@ class Router {
 	private void delegate(ServerRequest, ServerResponse) _errorHandler;
 
 	this() {
-		this.add("GET", "", indexPage);
+		this.add(Get(), indexPage);
 		_errorHandler = &this.defaultErrorHandler;
 	}
 
 	/*
 	 * Handles a connection.
 	 */
-	void handle(ref HandleResult result, AsyncTCPConnection client, ServerRequest req, ServerResponse res) {
+	void handle(ServerOptions options, ref HandleResult result, AsyncTCPConnection client, ServerRequest req, ServerResponse res) {
 		if(!req.url.path.startsWith("/")) {
 			res.status = StatusCodes.badRequest;
 		} else {
 			auto routes = req.method in this.routes;
 			if(routes) {
 				foreach_reverse(route ; *routes) {
-					route.handle(result, client, req, res);
+					route.handle(options, result, client, req, res);
 					if(result.success) return;
 				}
 			}
@@ -71,7 +71,7 @@ class Router {
 	}
 
 	private void defaultErrorHandler(ServerRequest req, ServerResponse res) {
-		errorPage.apply(["message": res.status.message, "error": res.status.toString(), "server": res.headers.get("Server", "lighttp")]).apply(req, res);
+		errorPage.apply(["message": res.status.message, "error": res.status.toString(), "server": res.headers["Server"]]).apply(req, res);
 	}
 
 	/**
@@ -86,8 +86,7 @@ class Router {
 						mixin("alias M = routes." ~ member ~ ";");
 						static if(is(typeof(__traits(getMember, T, member)) == function)) {
 							// function
-							static if(hasUDA!(__traits(getMember, T, member), Multipart)) this.addMultipart(uda, mixin("&routes." ~ member));
-							else this.add(uda, mixin("&routes." ~ member));
+							this.add(uda, mixin("&routes." ~ member));
 						} else static if(is(M == class)) {
 							// websocket
 							static if(__traits(isNested, M)) this.addWebSocket!M(uda, { return routes.new M(); });
@@ -106,23 +105,12 @@ class Router {
 	 * Adds a route.
 	 */
 	void add(T, E...)(RouteInfo!T info, void delegate(E) del) {
-		this.routes[info.method] ~= new RouteOf!(T, E)(info.path, del);
+		if(info.hasBody) this.routes[info.method] ~= new MultipartRouteOf!(T, E)(info.path, del);
+		else this.routes[info.method] ~= new RouteOf!(T, E)(info.path, del);
 	}
 
 	void add(T)(RouteInfo!T info, Resource resource) {
 		this.add(info, (ServerRequest req, ServerResponse res){ resource.apply(req, res); });
-	}
-
-	void add(T, E...)(string method, T path, void delegate(E) del) {
-		this.add(RouteInfo!T(method, path), del);
-	}
-
-	void add(T)(string method, T path, Resource resource) {
-		this.add(RouteInfo!T(method, path), resource);
-	}
-	
-	void addMultipart(T, E...)(RouteInfo!T info, void delegate(E) del) {
-		this.routes[info.method] ~= new MultipartRouteOf!(T, E)(info.path, del);
 	}
 
 	void addWebSocket(W:WebSocketConnection, T)(RouteInfo!T info, W delegate() del) {
@@ -142,7 +130,7 @@ class Router {
 
 class Route {
 
-	abstract void handle(ref HandleResult result, AsyncTCPConnection client, ServerRequest req, ServerResponse res);
+	abstract void handle(ServerOptions options, ref HandleResult result, AsyncTCPConnection client, ServerRequest req, ServerResponse res);
 
 }
 
@@ -178,19 +166,19 @@ class RouteImpl(T, E...) if(is(T == string) || isRegexFor!(T, string)) : Route {
 		this.path = path;
 	}
 	
-	void callImpl(void delegate(E) del, AsyncTCPConnection client, ServerRequest req, ServerResponse res, Match match) {
+	void callImpl(void delegate(E) del, ServerOptions options, AsyncTCPConnection client, ServerRequest req, ServerResponse res, Match match) {
 		Args args;
 		static if(__request != -1) args[__request] = req;
 		static if(__response != -1) args[__response] = res;
 		del(args, match);
 	}
 	
-	abstract void call(ref HandleResult result, AsyncTCPConnection client, ServerRequest req, ServerResponse res, Match match);
+	abstract void call(ServerOptions options, ref HandleResult result, AsyncTCPConnection client, ServerRequest req, ServerResponse res, Match match);
 	
-	override void handle(ref HandleResult result, AsyncTCPConnection client, ServerRequest req, ServerResponse res) {
+	override void handle(ServerOptions options, ref HandleResult result, AsyncTCPConnection client, ServerRequest req, ServerResponse res) {
 		static if(is(T == string)) {
 			if(req.url.path[1..$] == this.path) {
-				this.call(result, client, req, res);
+				this.call(options, result, client, req, res);
 				result.success = true;
 			}
 		} else {
@@ -207,7 +195,7 @@ class RouteImpl(T, E...) if(is(T == string) || isRegexFor!(T, string)) : Route {
 						args[i] = to!(Match[i])(matches[i+1]);
 					}
 				}
-				this.call(result, client, req, res, args);
+				this.call(options, result, client, req, res, args);
 				result.success = true;
 			}
 		}
@@ -224,8 +212,8 @@ class RouteOf(T, E...) : RouteImpl!(T, E) {
 		this.del = del;
 	}
 	
-	override void call(ref HandleResult result, AsyncTCPConnection client, ServerRequest req, ServerResponse res, Match match) {
-		this.callImpl(this.del, client, req, res, match);
+	override void call(ServerOptions options, ref HandleResult result, AsyncTCPConnection client, ServerRequest req, ServerResponse res, Match match) {
+		this.callImpl(this.del, options, client, req, res, match);
 	}
 	
 }
@@ -236,22 +224,29 @@ class MultipartRouteOf(T, E...) : RouteOf!(T, E) {
 		super(path, del);
 	}
 
-	override void call(ref HandleResult result, AsyncTCPConnection client, ServerRequest req, ServerResponse res, Match match) {
-		auto lstr = "content-length" in req.headers;
-		if(lstr) {
+	override void call(ServerOptions options, ref HandleResult result, AsyncTCPConnection client, ServerRequest req, ServerResponse res, Match match) {
+		if(auto lstr = "content-length" in req.headers) {
 			try {
 				size_t length = to!size_t(*lstr);
-				if(req.body_.length >= length) {
-					return super.call(result, client, req, res, match);
+				if(length > options.max) {
+					result.success = false;
+					res.status = StatusCodes.payloadTooLarge;
+				} else if(req.body_.length >= length) {
+					return super.call(options, result, client, req, res, match);
 				} else {
 					// wait for full data
-					result.connection = new MultipartConnection(client, length, req, { super.call(result, client, req, res, match); });
+					result.connection = new MultipartConnection(client, length, req, res, { super.call(options, result, client, req, res, match); });
+					res.ready = false;
 					return;
 				}
-			} catch(ConvException) {}
+			} catch(ConvException) {
+				result.success = false;
+				res.status = StatusCodes.badRequest;
+			}
+		} else {
+			// assuming body has no content
+			super.call(options, result, client, req, res, match);
 		}
-		result.success = false;
-		res.status = StatusCodes.badRequest;
 	}
 
 }
@@ -265,7 +260,7 @@ class WebSocketRouteOf(WebSocket, T, E...) : RouteImpl!(T, E) {
 		this.createWebSocket = createWebSocket;
 	}
 
-	override void call(ref HandleResult result, AsyncTCPConnection client, ServerRequest req, ServerResponse res, Match match) {
+	override void call(ServerOptions options, ref HandleResult result, AsyncTCPConnection client, ServerRequest req, ServerResponse res, Match match) {
 		auto key = "sec-websocket-key" in req.headers;
 		if(key) {
 			res.status = StatusCodes.switchingProtocols;
@@ -276,7 +271,7 @@ class WebSocketRouteOf(WebSocket, T, E...) : RouteImpl!(T, E) {
 			WebSocket webSocket = this.createWebSocket();
 			webSocket.conn = client;
 			result.connection = webSocket;
-			static if(__traits(hasMember, WebSocket, "onConnect")) webSocket.onStartImpl = { this.callImpl(&webSocket.onConnect, client, req, res, match); };
+			static if(__traits(hasMember, WebSocket, "onConnect")) webSocket.onStartImpl = { this.callImpl(&webSocket.onConnect, options, client, req, res, match); };
 		} else {
 			res.status = StatusCodes.notFound;
 		}
@@ -287,36 +282,35 @@ class WebSocketRouteOf(WebSocket, T, E...) : RouteImpl!(T, E) {
 struct RouteInfo(T) if(is(T : string) || is(T == Regex!char) || isRegexFor!(T, string)) {
 	
 	string method;
+	bool hasBody;
 	T path;
 
 }
 
-auto routeInfo(E...)(string method, E path) {
+auto routeInfo(E...)(string method, bool hasBody, E path) {
 	static if(E.length == 0) {
-		return routeInfo(method, "");
+		return routeInfo(method, hasBody, "");
 	} else static if(E.length == 1) {
-		static if(isRegexFor!(E[0], string)) return RouteInfo!E(method, path);
-		else return RouteInfo!(Regex!char)(method, regex(path));
+		static if(isRegexFor!(E[0], string)) return RouteInfo!E(method, hasBody, path);
+		else return RouteInfo!(Regex!char)(method, hasBody, regex(path));
 	} else {
 		string[] p;
 		foreach(pp ; path) p ~= pp;
-		return RouteInfo!(Regex!char)(method, regex(p.join(`\/`)));
+		return RouteInfo!(Regex!char)(method, hasBody, regex(p.join(`\/`)));
 	}
 }
 
 private enum isRouteInfo(T) = is(T : RouteInfo!R, R);
 
-auto CustomMethod(R)(string method, R path){ return RouteInfo!R(method, path); }
+auto CustomMethod(R)(string method, bool hasBody, R path){ return routeInfo!R(method, hasBody, path); }
 
-auto Get(R...)(R path){ return routeInfo!R("GET", path); }
+auto Get(R...)(R path){ return routeInfo!R("GET", false, path); }
 
-auto Post(R...)(R path){ return routeInfo!R("POST", path); }
+auto Post(R...)(R path){ return routeInfo!R("POST", true, path); }
 
-auto Put(R...)(R path){ return routeInfo!R("PUT", path); }
+auto Put(R...)(R path){ return routeInfo!R("PUT", true, path); }
 
-auto Delete(R...)(R path){ return routeInfo!R("DELETE", path); }
-
-enum Multipart;
+auto Delete(R...)(R path){ return routeInfo!R("DELETE", false, path); }
 
 void registerRoutes(R)(Router register, R router) {
 

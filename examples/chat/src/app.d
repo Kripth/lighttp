@@ -35,9 +35,9 @@ class Chat {
 		public string name;
 		private Room* room;
 		
-		void onConnect(Address address, string room, string name) {
+		void onConnect(ServerRequest request, string room, string name) {
 			this.id = _id++;
-			this.ip = address.toAddrString();
+			this.ip = request.address.toString();
 			this.name = name;
 			if(room !in rooms) rooms[room] = new Room();
 			this.room = room in rooms;
