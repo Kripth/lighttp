@@ -166,7 +166,6 @@ class Connection {
 				break;
 			case CLOSE:
 				this.onClose();
-				//TODO schedule for destruction
 				break;
 			default:
 				break;
@@ -194,14 +193,19 @@ class DefaultConnection : Connection {
 	override void onRead() {
 		_handle();
 	}
-	
+
 	void handle() {
+		handleImpl(this.buffer.data!char);
+	}
+	
+	protected void handleImpl(string data) {
 		ServerRequest request = new ServerRequest();
 		ServerResponse response = new ServerResponse();
 		request.address = this.conn.local;
 		response.headers["Server"] = this.server.name;
 		HandleResult result;
-		if(request.parse(this.buffer.data!char)) {
+		if(request.parse(data)) {
+			if(auto connection = "connection" in request.headers) response.headers["Connection"] = *connection;
 			try this.server.router.handle(result, this.conn, request, response);
 			catch(Exception) response.status = StatusCodes.internalServerError;
 		} else {
@@ -209,11 +213,12 @@ class DefaultConnection : Connection {
 		}
 		if(response.status.code >= 400 && response.body_.length == 0) this.server.router.handleError(request, response);
 		this.conn.send(cast(ubyte[])response.toString());
-		if(result.connection is null) {
-			this.conn.kill();
-		} else {
+		auto connection = "connection" in response.headers;
+		if(result.connection !is null) {
 			_handle = &result.connection.onRead;
 			result.connection.onStart();
+		} else if(connection is null || toLower(*connection) != "keep-alive") {
+			this.conn.kill();
 		}
 	}
 	

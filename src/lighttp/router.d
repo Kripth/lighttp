@@ -202,7 +202,7 @@ class RouteImpl(T, E...) if(is(T == string) || isRegexFor!(T, string)) : Route {
 				static if(E.length == 1 && is(E[0] == string[])) {
 					args[0] = matches[1..$];
 				} else {
-					if(matches.length != args.length + 1) throw new Exception("Arguments count mismatch"); //TODO do this check at compile time if possible
+					if(matches.length != args.length + 1) throw new Exception("Arguments count mismatch");
 					static foreach(i ; 0..Match.length) {
 						args[i] = to!(Match[i])(matches[i+1]);
 					}

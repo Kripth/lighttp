@@ -72,7 +72,7 @@ enum StatusCodes : Status {
 	continue_ = Status(100, "Continue"),
 	switchingProtocols = Status(101, "Switching Protocols"),
 	
-	// success
+	// successful
 	ok = Status(200, "OK"),
 	created = Status(201, "Created"),
 	accepted = Status(202, "Accepted"),
@@ -92,7 +92,7 @@ enum StatusCodes : Status {
 	temporaryRedirect = Status(307, "Temporary Redirect"),
 	permanentRedirect = Status(308, "Permanent Redirect"),
 	
-	// client errors
+	// client error
 	badRequest = Status(400, "Bad Request"),
 	unauthorized = Status(401, "Unauthorized"),
 	paymentRequired = Status(402, "Payment Required"),
@@ -112,7 +112,7 @@ enum StatusCodes : Status {
 	rangeNotSatisfiable = Status(416, "Range Not Satisfiable"),
 	expectationFailed = Status(417, "Expectation Failed"),
 	
-	// server errors
+	// server error
 	internalServerError = Status(500, "Internal Server Error"),
 	notImplemented = Status(501, "Not Implemented"),
 	badGateway = Status(502, "Bad Gateway"),
@@ -129,7 +129,7 @@ enum MimeTypes : string {
 	
 	// text
 	html = "text/html",
-	script = "text/javascript",
+	javascript = "text/javascript",
 	css = "text/css",
 	text = "text/plain",
 	
@@ -145,6 +145,32 @@ enum MimeTypes : string {
 	zip = "application/zip",
 	bin = "application/octet-stream",
 	
+}
+
+private struct Headers {
+
+	string[string] _headers, _lowerHeaders;
+
+	string* opBinaryRight(string op : "in")(string key) pure @safe {
+		return key.toLower in _lowerHeaders;
+	}
+
+	string opIndex(string key) pure @safe {
+		return _lowerHeaders[key.toLower()];
+	}
+
+	string opIndexAssign(string value, string key) pure @safe {
+		return _headers[key] = _lowerHeaders[key.toLower] = value;
+	}
+
+	string get(string key, lazy string defaultValue) pure @safe {
+		return _lowerHeaders.get(key.toLower, defaultValue);
+	}
+
+	@property string[string] headers() {
+		return _headers;
+	}
+
 }
 
 private enum User {
@@ -167,10 +193,13 @@ abstract class Http {
 
 	public Status status;
 
-	public string[string] headers;
+	public Headers headers;
 
 	protected string _body;
 
+	/**
+	 * Gets the method used for the request.
+	 */
 	public @property string method() pure nothrow @safe @nogc {
 		return _method;
 	}
@@ -189,7 +218,7 @@ abstract class Http {
 		static if(is(T : string)) {
 			return _body = cast(string)data;
 		} else static if(is(T == JSONValue)) {
-			this.contentType = "application/json; charset=utf-8";
+			this.contentType = MimeTypes.json;
 			return _body = data.toString();
 		} else static if(is(T == JSONValue[string]) || is(T == JSONValue[])) {
 			return body_ = JSONValue(data);
@@ -208,7 +237,7 @@ abstract class Http {
 	 * response.contentType = MimeTypes.html;
 	 * ---
 	 */
-	public @property string contentType(string contentType) pure nothrow @safe {
+	public @property string contentType(string contentType) pure @safe {
 		return this.headers["Content-Type"] = contentType;
 	}
 
@@ -247,6 +276,7 @@ template HttpImpl(User user, Type type) {
 			public void redirect(Status status, string location) {
 				this.status = status;
 				this.headers["Location"] = location;
+				this.headers["Connection"] = "keep-alive";
 			}
 			
 			/// ditto
@@ -262,12 +292,11 @@ template HttpImpl(User user, Type type) {
 		}
 
 		public override string toString() {
+			this.headers["Content-Length"] = to!string(this.body_.length);
 			static if(type == Type.request) {
-				if(this.body_.length) this.headers["Content-Length"] = to!string(this.body_.length);
-				return encodeHTTP(this.method.toUpper() ~ " " ~ encode(this.url.path ~ this.url.queryParams.toString()) ~ " HTTP/1.1", this.headers, this.body_);
+				return encodeHTTP(this.method.toUpper() ~ " " ~ encode(this.url.path ~ this.url.queryParams.toString()) ~ " HTTP/1.1", this.headers.headers, this.body_);
 			} else {
-				this.headers["Content-Length"] = to!string(this.body_.length);
-				return encodeHTTP("HTTP/1.1 " ~ this.status.toString(), this.headers, this.body_);
+				return encodeHTTP("HTTP/1.1 " ~ this.status.toString(), this.headers.headers, this.body_);
 			}
 		}
 
@@ -325,7 +354,7 @@ private string encodeHTTP(string status, string[string] headers, string content)
 	return ret.data;
 }
 
-private bool decodeHTTP(string str, ref string status, ref string[string] headers, ref string content) {
+private bool decodeHTTP(string str, ref string status, ref Headers headers, ref string content) {
 	string[] spl = str.split(crlf);
 	if(spl.length > 1) {
 		status = spl[0];
@@ -333,7 +362,7 @@ private bool decodeHTTP(string str, ref string status, ref string[string] header
 		while(++index < spl.length && spl[index].length) { // read until empty line
 			auto s = spl[index].split(":");
 			if(s.length >= 2) {
-				headers[s[0].strip.toLower()] = s[1..$].join(":").strip;
+				headers[s[0].strip] = s[1..$].join(":").strip;
 			} else {
 				return false; // invalid header
 			}
