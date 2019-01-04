@@ -2,6 +2,7 @@
 
 import std.array : Appender;
 import std.conv : to, ConvException;
+import std.datetime : DateTime;
 import std.json : JSONValue;
 import std.regex : ctRegex;
 import std.string : toUpper, toLower, split, join, strip, indexOf;
@@ -123,7 +124,7 @@ enum StatusCodes : Status {
 }
 
 /**
- * Frequently used Mime types.
+ * Frequently used mime types.
  */
 enum MimeTypes : string {
 	
@@ -147,28 +148,41 @@ enum MimeTypes : string {
 	
 }
 
-private struct Headers {
+struct Cookie {
 
-	string[string] _headers, _lowerHeaders;
+	string name;
+	string value;
+	DateTime expires;
+	size_t maxAge;
+	string domain;
+	string path;
+	bool secure;
+	bool httpOnly;
 
-	string* opBinaryRight(string op : "in")(string key) pure @safe {
-		return key.toLower in _lowerHeaders;
-	}
-
-	string opIndex(string key) pure @safe {
-		return _lowerHeaders[key.toLower()];
-	}
-
-	string opIndexAssign(string value, string key) pure @safe {
-		return _headers[key] = _lowerHeaders[key.toLower] = value;
-	}
-
-	string get(string key, lazy string defaultValue) pure @safe {
-		return _lowerHeaders.get(key.toLower, defaultValue);
-	}
-
-	@property string[string] headers() {
-		return _headers;
+	string toString() {
+		Appender!string ret;
+		ret.put(name);
+		ret.put("=");
+		ret.put(value);
+		if(expires != DateTime.init) {
+			ret.put(";Expires=");
+			ret.put(expires.toString()); //TODO format correctly
+		}
+		if(maxAge != size_t.init) {
+			ret.put(";Max-Age=");
+			ret.put(maxAge.to!string);
+		}
+		if(domain.length) {
+			ret.put(";Domain=");
+			ret.put(domain);
+		}
+		if(path.length) {
+			ret.put(";Path=");
+			ret.put(path);
+		}
+		if(secure) ret.put(";Secure");
+		if(httpOnly) ret.put(";HttpOnly");
+		return ret.data;
 	}
 
 }
@@ -187,13 +201,130 @@ private enum Type {
 
 }
 
+/**
+ * Base class for requests and responses.
+ */
 abstract class Http {
+
+	/**
+	 * Headers utility.
+	 */
+	static struct Headers {
+		
+		static struct Header {
+			
+			string key;
+			string value;
+			
+		}
+		
+		private Header[] _headers;
+		size_t[string] _headersIndexes;
+
+		/**
+		 * Gets the pointer to a header.
+		 * The key is case insensitive.
+		 * Example:
+		 * ---
+		 * headers["Connection"] = "keep-alive";
+		 * assert(("connection" in headers) is ("Connection" in headers));
+		 * ---
+		 */
+		string* opBinaryRight(string op : "in")(string key) pure @safe {
+			if(auto ptr = key.toLower in _headersIndexes) return &_headers[*ptr].key;
+			else return null;
+		}
+
+		/**
+		 * Gets the value of a header.
+		 * The key is case insensitive.
+		 * Example:
+		 * ---
+		 * headers["Connection"] = "keep-alive";
+		 * assert(header["connection"] == "keep-alive");
+		 * ---
+		 */
+		string opIndex(string key) pure @safe {
+			return _headers[_headersIndexes[key.toLower]].value;
+		}
+		
+		/**
+		 * Gets the value of a header and returns `defaultValue` if
+		 * it does not exist.
+		 * Example:
+		 * ---
+		 * assert(headers.get("Connection", "close") == "close");
+		 * headers["Connection"] = "keep-alive";
+		 * assert(headers.get("Connection", "close") != "close");
+		 * ---
+		 */
+		string get(string key, lazy string defaultValue) pure @safe {
+			if(auto ptr = key.toLower in _headersIndexes) return _headers[*ptr].value;
+			else return defaultValue;
+		}
+
+		/**
+		 * Assigns, and overrides if it already exists, a header value.
+		 * The key is case-insensitive.
+		 * Example:
+		 * ---
+		 * headers["Connection"] = "keep-alive";
+		 * headers["connection"] = "close";
+		 * assert(headers["Connection"] == "close");
+		 * --
+		 */
+		string opIndexAssign(string value, string key) pure @safe {
+			if(auto ptr = key.toLower in _headersIndexes) return _headers[*ptr].value = value;
+			else {
+				_headersIndexes[key.toLower] = _headers.length;
+				_headers ~= Header(key, value);
+				return value;
+			}
+		}
+
+		/**
+		 * Adds a new key-value pair to the headers without overriding
+		 * the existing ones.
+		 * Example:
+		 * ---
+		 * headers.add("Set-Cookie", "a=b");
+		 * headers.add("Set-Cookie", "b=c");
+		 * ---
+		 */
+		void add(string key, string value) pure @safe {
+			if(!(key.toLower in _headersIndexes)) _headersIndexes[key.toLower] = _headers.length;
+			_headers ~= Header(key, value);
+		}
+		
+		@property Header[] headers() {
+			return _headers;
+		}
+		
+	}
 
 	protected string _method;
 
+	/**
+	 * Gets and sets the status of the request/response.
+	 * The value can be one of the enum `StatusCodes` or a custom
+	 * status using the `Status` struct.
+	 */
 	public Status status;
 
+	/**
+	 * Gets the header manager of the request/response.
+	 * The available methods are the same of the associative array's
+	 * except that keys are case-insensitive.
+	 * Example:
+	 * ---
+	 * headers["Connection"] = "keep-alive";
+	 * assert(headers["connection"] == "keep-alive");
+	 * ---
+	 */
 	public Headers headers;
+
+	private bool _cookiesInit = false;
+	private string[string] _cookies;
 
 	protected string _body;
 
@@ -202,6 +333,33 @@ abstract class Http {
 	 */
 	public @property string method() pure nothrow @safe @nogc {
 		return _method;
+	}
+
+	/**
+	 * Gets the cookies sent in the `Cookie` header in the request.
+	 * This property is lazily initialized.
+	 */
+	public @property string[string] cookies() {
+		if(!_cookiesInit) {
+			if(auto cookies = "cookie" in headers) {
+				foreach(cookie ; split(*cookies, ";")) {
+					cookie = cookie.strip;
+					immutable eq = cookie.indexOf("=");
+					if(eq > 0) {
+						_cookies[cookie[0..eq]] = cookie[eq+1..$];
+					}
+				}
+			}
+			_cookiesInit = true;
+		}
+		return _cookies;
+	}
+
+	/**
+	 * Adds a cookie to the response's header.
+	 */
+	public void add(Cookie cookie) {
+		this.headers.add("Set-Cookie", cookie.toString());
 	}
 	
 	/**
@@ -256,6 +414,11 @@ template HttpImpl(User user, Type type) {
 
 		static if(type == Type.request) private URL _url;
 
+		/**
+		 * Gets the url of the request. `url.path` can be used to
+		 * retrive the path and `url.queryParams` to retrive the query
+		 * parameters.
+		 */
 		static if(type == Type.request) public @property URL url() pure nothrow @safe @nogc {
 			return _url;
 		}
@@ -339,14 +502,14 @@ alias ServerResponse = HttpImpl!(User.server, Type.response);
 
 private enum crlf = "\r\n";
 
-private string encodeHTTP(string status, string[string] headers, string content) {
+private string encodeHTTP(string status, Http.Headers.Header[] headers, string content) {
 	Appender!string ret;
 	ret.put(status);
 	ret.put(crlf);
-	foreach(key, value; headers) {
-		ret.put(key);
+	foreach(header ; headers) {
+		ret.put(header.key);
 		ret.put(": ");
-		ret.put(value);
+		ret.put(header.value);
 		ret.put(crlf);
 	}
 	ret.put(crlf); // empty line
@@ -354,7 +517,7 @@ private string encodeHTTP(string status, string[string] headers, string content)
 	return ret.data;
 }
 
-private bool decodeHTTP(string str, ref string status, ref Headers headers, ref string content) {
+private bool decodeHTTP(string str, ref string status, ref Http.Headers headers, ref string content) {
 	string[] spl = str.split(crlf);
 	if(spl.length > 1) {
 		status = spl[0];
