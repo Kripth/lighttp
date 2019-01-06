@@ -1,14 +1,13 @@
-﻿module lighttp.server;
+﻿module lighttp.server.server;
 
 import std.string : toLower;
 import std.system : Endian;
 
 import libasync;
 
-import xbuffer;
-import xbuffer.memory : xalloc, xfree;
+import xbuffer : Buffer, BufferOverflowException;
 
-import lighttp.router;
+import lighttp.server.router;
 import lighttp.util;
 
 /**
@@ -20,7 +19,7 @@ struct ServerOptions {
 	 * Name of the server set as value in the `Server` header field
 	 * and displayed in lighttp's default error messages.
 	 */
-	string name = "lighttp/0.5";
+	string name = "lighttp/0.6";
 
 	/**
 	 * Indicates whether the handler should catch exceptions.

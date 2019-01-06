@@ -1,4 +1,4 @@
-﻿module lighttp.resource;
+﻿module lighttp.server.resource;
 
 import std.array : Appender;
 import std.base64 : Base64URLNoPadding;

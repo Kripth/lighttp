@@ -416,6 +416,12 @@ template HttpImpl(User user, Type type) {
 
 		static if(user == User.server && type == Type.response) public bool ready = true;
 
+		static if(user == user.client && type == Type.request) public this(string method, string path, string body_="") {
+			_method = method;
+			_url.path = path;
+			_body = body_;
+		}
+
 		/**
 		 * Gets the url of the request. `url.path` can be used to
 		 * retrive the path and `url.queryParams` to retrive the query

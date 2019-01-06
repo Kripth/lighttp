@@ -7,5 +7,5 @@
 *.selections.json
 *.lst
 *-test-library
-src/app.d
-lighttp
+/src/app.d
+/lighttp

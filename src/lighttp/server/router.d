@@ -1,4 +1,4 @@
-﻿module lighttp.router;
+﻿module lighttp.server.router;
 
 import std.algorithm : max;
 import std.base64 : Base64;
@@ -11,8 +11,8 @@ import std.traits : Parameters, hasUDA;
 
 import libasync : AsyncTCPConnection;
 
-import lighttp.resource;
-import lighttp.server : ServerOptions, Connection, MultipartConnection, WebSocketConnection;
+import lighttp.server.resource;
+import lighttp.server.server : ServerOptions, Connection, MultipartConnection, WebSocketConnection;
 import lighttp.util;
 
 struct HandleResult {
