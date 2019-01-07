@@ -231,6 +231,17 @@ class DefaultConnection : Connection {
 		request.address = this.conn.local;
 		response.headers["Server"] = this.server.options.name;
 		HandleResult result;
+		void delegate() send = {
+			this.conn.send(cast(ubyte[])response.toString());
+			auto connection = "connection" in response.headers;
+			if(result.connection !is null) {
+				_handle = &result.connection.onRead;
+				result.connection.buffer = this.buffer;
+				result.connection.onStart();
+			} else if(connection is null || toLower(*connection) != "keep-alive") {
+				this.conn.kill();
+			}
+		};
 		if(request.parse(data)) {
 			//TODO max request size
 			if(auto connection = "connection" in request.headers) response.headers["Connection"] = *connection;
@@ -239,15 +250,8 @@ class DefaultConnection : Connection {
 			response.status = StatusCodes.badRequest;
 		}
 		if(response.status.code >= 400 && response.body_.length == 0) this.server.router.handleError(request, response);
-		if(response.ready) this.conn.send(cast(ubyte[])response.toString());
-		auto connection = "connection" in response.headers;
-		if(result.connection !is null) {
-			_handle = &result.connection.onRead;
-			result.connection.buffer = this.buffer;
-			result.connection.onStart();
-		} else if(connection is null || toLower(*connection) != "keep-alive") {
-			this.conn.kill();
-		}
+		if(response.ready) send();
+		else response.send = send;
 	}
 	
 	override void onClose() {}

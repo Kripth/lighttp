@@ -414,7 +414,12 @@ template HttpImpl(User user, Type type) {
 
 		static if(type == Type.request) private URL _url;
 
-		static if(user == User.server && type == Type.response) public bool ready = true;
+		static if(user == User.server && type == Type.response) {
+
+			public void delegate() send;
+			public bool ready = true;
+
+		}
 
 		static if(user == user.client && type == Type.request) public this(string method, string path, string body_="") {
 			_method = method;
