@@ -21,7 +21,7 @@ struct Status {
 	/**
 	 * HTTP response status code.
 	 */
-	uint code;
+	uint code = 200;
 	
 	/**
 	 * Additional short description of the status code.
