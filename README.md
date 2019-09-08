@@ -18,7 +18,7 @@ void main(string[] args) {
 	server.host("0.0.0.0");
 	server.host("::");
 	server.router.add(new Router());
-	server.router.add("GET", "welcome", new Resource("text/html", read("welcome.html")));
+	server.router.add(Get("welcome"), new Resource("text/html", read("welcome.html")));
 	server.run();
 
 }
@@ -26,12 +26,12 @@ void main(string[] args) {
 class Router {
 
 	// GET /
-	@Get("") getIndex(Response response) {
+	@Get("") getIndex(ServerResponse response) {
 		response.body = "Welcome to lighttp!";
 	}
 	
 	// GET /image/uhDUnsj => imageId = "uhDUnsj"
-	@Get("image", "([a-zA-Z0-9]{7})") getImage(Response response, string imageId) {
+	@Get("image", "([a-zA-Z0-9]{7})") getImage(ServerResponse response, string imageId) {
 		if(exists("images/" ~ imageId)) {
 			response.contentType = MimeTypes.jpeg;
 			response.body = read("images/" ~ imageId);
