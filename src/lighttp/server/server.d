@@ -1,4 +1,4 @@
-﻿module lighttp.server.server;
+module lighttp.server.server;
 
 import std.string : toLower;
 import std.system : Endian;
@@ -176,7 +176,8 @@ class Connection {
 					if(len > 0) this.buffer.write(__buffer[0..len]);
 					if(len < __buffer.length) break;
 				}
-				this.onRead();
+				if (this.buffer.data!void.length > 0)
+					this.onRead();
 				break;
 			case CLOSE:
 				this.onClose();
