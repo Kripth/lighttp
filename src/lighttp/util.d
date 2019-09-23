@@ -556,7 +556,7 @@ private bool decodeHTTP(string str, ref string status, ref Http.Headers headers,
 				return false; // invalid header
 			}
 		}
-		content = join(spl[index+1..$], crlf);
+		content = (index + 1 < spl.length) ? join(spl[index + 1..$], crlf) : string.init;
 		return true;
 	} else {
 		return false;
