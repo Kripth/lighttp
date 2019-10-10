@@ -107,7 +107,7 @@ class Client {
 		}
 
 		bool close() {
-			return _connection.kill();
+			return _connection.kill(true);
 		}
 		
 		private void handler(TCPEvent event) {

@@ -240,7 +240,7 @@ class DefaultConnection : Connection {
 				result.connection.buffer = this.buffer;
 				result.connection.onStart();
 			} else if(connection is null || toLower(*connection) != "keep-alive") {
-				this.conn.kill();
+				this.conn.kill(true);
 			}
 		};
 		if(request.parse(data)) {
@@ -280,7 +280,7 @@ class MultipartConnection : Connection {
 		if(this.req.body_.length >= this.length) {
 			this.callback();
 			this.conn.send(cast(ubyte[])res.toString());
-			this.conn.kill();
+			this.conn.kill(true);
 		}
 	}
 	
