@@ -233,7 +233,14 @@ class DefaultConnection : Connection {
 		response.headers["Server"] = this.server.options.name;
 		HandleResult result;
 		void delegate() send = {
-			this.conn.send(cast(ubyte[])response.toString());
+			ubyte[] buffer = cast(ubyte[])response.toString();
+			long len;
+        	for (size_t off; off < buffer.length; off += len) {
+            	len = this.conn.send(buffer[off..$]);
+            	if (len < 0) {
+            		break;
+            	}
+            }
 			auto connection = "connection" in response.headers;
 			if(result.connection !is null) {
 				_handle = &result.connection.onRead;
