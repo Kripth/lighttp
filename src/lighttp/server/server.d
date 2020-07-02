@@ -311,7 +311,8 @@ class WebSocketConnection : Connection {
 	}
 	
 	override void onRead() {
-		try if((this.buffer.read!ubyte() & 0b1111) == 1) {
+		ubyte type = this.buffer.read!ubyte() & 0b1111;
+		try if(type == 1 || type == 2) {
 			immutable info = this.buffer.read!ubyte();
 			immutable masked = (info & 0b10000000) != 0;
 			size_t length = info & 0b01111111;
@@ -320,15 +321,20 @@ class WebSocketConnection : Connection {
 			} else if(length == 0b01111111) {
 				length = this.buffer.read!(Endian.bigEndian, ulong)() & size_t.max;
 			}
+			ubyte[] data;
 			if(masked) {
 				ubyte[] mask = this.buffer.read!(ubyte[])(4);
-				ubyte[] data = this.buffer.read!(ubyte[])(length);
+				data = this.buffer.read!(ubyte[])(length);
 				foreach(i, ref ubyte p; data) {
 					p ^= mask[i % 4];
 				}
+			} else {
+				data = this.buffer.read!(ubyte[])(length);
+			}
+			if (type == 2) {
 				this.onReceive(data);
 			} else {
-				this.onReceive(this.buffer.read!(ubyte[])(length));
+				this.onReceive(cast(char[]) data);
 			}
 		} catch(BufferOverflowException) {}
 	}
@@ -336,9 +342,17 @@ class WebSocketConnection : Connection {
 	/**
 	 * Sends data to the connected web socket.
 	 */
-	void send(in void[] data) {
+	void send(in const(ubyte)[] data) {
+		this.sendImpl(data, 0b10000010);
+	}
+	/// ditto
+	void send(in const(char)[] data) {
+		this.sendImpl(data, 0b10000001);
+	}
+	
+	private void sendImpl(in void[] data, ubyte type) {
 		this.buffer.reset();
-		this.buffer.write!ubyte(0b10000001);
+		this.buffer.write!ubyte(type);
 		if(data.length < 0b01111110) {
 			this.buffer.write!ubyte(data.length & ubyte.max);
 		} else if(data.length < ushort.max) {
@@ -355,7 +369,13 @@ class WebSocketConnection : Connection {
 	/**
 	 * Notifies that the client has sent some data.
 	 */
-	abstract void onReceive(ubyte[] data);
+	void onReceive(ubyte[] data) {
+		assert(false, "Received binary data when not implemented.");
+	}
+	/// ditto
+	void onReceive(char[] data) {
+		assert(false, "Received text data when not implemented.");
+	}
 	
 	/**
 	 * Notifies that the connection has been interrupted.
